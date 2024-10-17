@@ -155,7 +155,7 @@ func (s *TMDSAgentState) getTaskMetadata(v3EndpointID string, includeTags bool, 
 			NewPulledContainerResponse(dockerContainer, task.GetPrimaryENI()))
 	}
 
-	taskResponse.FaultInjectionEnabled = task.IsFaultInjectionEnabled()
+	taskResponse.FaultInjectionEnabled = true
 	if includeTaskNetworkConfig {
 		var taskNetworkConfig *tmdsv4.TaskNetworkConfig
 		if task.IsNetworkModeHost() {

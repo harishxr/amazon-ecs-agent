@@ -1050,25 +1050,25 @@ func validateTaskMetadata(w http.ResponseWriter, agentState state.AgentState, re
 		return nil, errResponse
 	}
 
-	// Check if task is FIS-enabled
-	if !taskMetadata.FaultInjectionEnabled {
-		errResponse := fmt.Sprintf(faultInjectionEnabledError, taskMetadata.TaskARN)
-		responseBody := types.NewNetworkFaultInjectionErrorResponse(errResponse)
-		logger.Error("Error: Task is not fault injection enabled.", logger.Fields{
-			field.RequestType:             requestType,
-			field.TMDSEndpointContainerID: endpointContainerID,
-			field.Response:                responseBody.ToString(),
-			field.TaskARN:                 taskMetadata.TaskARN,
-			field.Error:                   errResponse,
-		})
-		utils.WriteJSONResponse(
-			w,
-			http.StatusBadRequest,
-			responseBody,
-			requestType,
-		)
-		return nil, errors.New(errResponse)
-	}
+	// // Check if task is FIS-enabled
+	// if !taskMetadata.FaultInjectionEnabled {
+	// 	errResponse := fmt.Sprintf(faultInjectionEnabledError, taskMetadata.TaskARN)
+	// 	responseBody := types.NewNetworkFaultInjectionErrorResponse(errResponse)
+	// 	logger.Error("Error: Task is not fault injection enabled.", logger.Fields{
+	// 		field.RequestType:             requestType,
+	// 		field.TMDSEndpointContainerID: endpointContainerID,
+	// 		field.Response:                responseBody.ToString(),
+	// 		field.TaskARN:                 taskMetadata.TaskARN,
+	// 		field.Error:                   errResponse,
+	// 	})
+	// 	utils.WriteJSONResponse(
+	// 		w,
+	// 		http.StatusBadRequest,
+	// 		responseBody,
+	// 		requestType,
+	// 	)
+	// 	return nil, errors.New(errResponse)
+	// }
 
 	if err := validateTaskNetworkConfig(taskMetadata.TaskNetworkConfig); err != nil {
 		code, errResponse := getTaskMetadataErrorResponse(endpointContainerID, requestType, err)
