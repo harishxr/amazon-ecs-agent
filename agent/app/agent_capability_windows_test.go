@@ -29,10 +29,10 @@ import (
 	dm "github.com/aws/amazon-ecs-agent/agent/engine/daemonmanager"
 	"github.com/aws/amazon-ecs-agent/agent/engine/serviceconnect"
 	mock_mobypkgwrapper "github.com/aws/amazon-ecs-agent/agent/utils/mobypkgwrapper/mocks"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
-	"github.com/aws/aws-sdk-go/aws"
-	aws_credentials "github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -47,7 +47,7 @@ func TestVolumeDriverCapabilitiesWindows(t *testing.T) {
 
 	client := mock_dockerapi.NewMockDockerClient(ctrl)
 	cniClient := mock_ecscni.NewMockCNIClient(ctrl)
-	mockCredentialsProvider := app_mocks.NewMockProvider(ctrl)
+	mockCredentialsProvider := app_mocks.NewMockCredentialsProvider(ctrl)
 	mockMobyPlugins := mock_mobypkgwrapper.NewMockPlugins(ctrl)
 	conf := &config.Config{
 		AvailableLoggingDrivers: []dockerclient.LoggingDriver{
@@ -62,7 +62,7 @@ func TestVolumeDriverCapabilitiesWindows(t *testing.T) {
 		AppArmorCapable:            config.BooleanDefaultFalse{Value: config.ExplicitlyEnabled},
 		TaskENIEnabled:             config.BooleanDefaultFalse{Value: config.ExplicitlyEnabled},
 		AWSVPCBlockInstanceMetdata: config.BooleanDefaultFalse{Value: config.ExplicitlyEnabled},
-		TaskCleanupWaitDuration:    config.DefaultConfig().TaskCleanupWaitDuration,
+		TaskCleanupWaitDuration:    config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility()).TaskCleanupWaitDuration,
 	}
 
 	gomock.InOrder(
@@ -110,7 +110,7 @@ func TestVolumeDriverCapabilitiesWindows(t *testing.T) {
 		cfg:                   conf,
 		dockerClient:          client,
 		cniClient:             cniClient,
-		credentialProvider:    aws_credentials.NewCredentials(mockCredentialsProvider),
+		credentialsCache:      aws.NewCredentialsCache(mockCredentialsProvider),
 		mobyPlugins:           mockMobyPlugins,
 		serviceconnectManager: serviceconnect.NewManager(),
 		daemonManagers:        make(map[string]dm.DaemonManager),
@@ -134,7 +134,7 @@ func TestSupportedCapabilitiesWindows(t *testing.T) {
 
 	client := mock_dockerapi.NewMockDockerClient(ctrl)
 	cniClient := mock_ecscni.NewMockCNIClient(ctrl)
-	mockCredentialsProvider := app_mocks.NewMockProvider(ctrl)
+	mockCredentialsProvider := app_mocks.NewMockCredentialsProvider(ctrl)
 	mockMobyPlugins := mock_mobypkgwrapper.NewMockPlugins(ctrl)
 	conf := &config.Config{
 		AvailableLoggingDrivers: []dockerclient.LoggingDriver{
@@ -149,7 +149,7 @@ func TestSupportedCapabilitiesWindows(t *testing.T) {
 		AppArmorCapable:            config.BooleanDefaultFalse{Value: config.ExplicitlyEnabled},
 		TaskENIEnabled:             config.BooleanDefaultFalse{Value: config.ExplicitlyEnabled},
 		AWSVPCBlockInstanceMetdata: config.BooleanDefaultFalse{Value: config.ExplicitlyEnabled},
-		TaskCleanupWaitDuration:    config.DefaultConfig().TaskCleanupWaitDuration,
+		TaskCleanupWaitDuration:    config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility()).TaskCleanupWaitDuration,
 	}
 
 	gomock.InOrder(
@@ -208,7 +208,7 @@ func TestSupportedCapabilitiesWindows(t *testing.T) {
 		cfg:                   conf,
 		dockerClient:          client,
 		cniClient:             cniClient,
-		credentialProvider:    aws_credentials.NewCredentials(mockCredentialsProvider),
+		credentialsCache:      aws.NewCredentialsCache(mockCredentialsProvider),
 		mobyPlugins:           mockMobyPlugins,
 		serviceconnectManager: serviceconnect.NewManager(),
 		daemonManagers:        make(map[string]dm.DaemonManager),
@@ -263,8 +263,8 @@ func TestAppendFSxWindowsFileServerCapabilities(t *testing.T) {
 
 	assert.Equal(t, len(expectedCapabilities), len(capabilities))
 	for i, expected := range expectedCapabilities {
-		assert.Equal(t, aws.StringValue(expected.Name), aws.StringValue(capabilities[i].Name))
-		assert.Equal(t, aws.StringValue(expected.Value), aws.StringValue(capabilities[i].Value))
+		assert.Equal(t, aws.ToString(expected.Name), aws.ToString(capabilities[i].Name))
+		assert.Equal(t, aws.ToString(expected.Value), aws.ToString(capabilities[i].Value))
 	}
 }
 

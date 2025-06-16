@@ -33,7 +33,6 @@ import (
 	mock_factory "github.com/aws/amazon-ecs-agent/agent/asm/factory/mocks"
 	mock_secretsmanageriface "github.com/aws/amazon-ecs-agent/agent/asm/mocks"
 	"github.com/aws/amazon-ecs-agent/agent/config"
-	"github.com/aws/amazon-ecs-agent/agent/config/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient/dockerapi"
 	mock_dockerapi "github.com/aws/amazon-ecs-agent/agent/dockerclient/dockerapi/mocks"
@@ -55,6 +54,7 @@ import (
 	apitaskstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/task/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
 	mock_credentials "github.com/aws/amazon-ecs-agent/ecs-agent/credentials/mocks"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	ni "github.com/aws/amazon-ecs-agent/ecs-agent/netlib/model/networkinterface"
 	commonutils "github.com/aws/amazon-ecs-agent/ecs-agent/utils"
 	dockertypes "github.com/docker/docker/api/types"
@@ -3037,7 +3037,7 @@ func TestInitializeAndGetSSMSecretResource(t *testing.T) {
 		},
 	}
 
-	task.initializeSSMSecretResource(credentialsManager, resFields)
+	task.initializeSSMSecretResource(&config.Config{InstanceIPCompatibility: testIPCompatibility}, credentialsManager, resFields)
 
 	resourceDep := apicontainer.ResourceDependency{
 		Name:           ssmsecret.ResourceName,
@@ -5829,6 +5829,98 @@ func TestPopulateServiceConnectContainerMappingEnvVarAwsvpc(t *testing.T) {
 				container := tc.task.GetServiceConnectContainer()
 				assert.Equal(t, tc.expectedContainerMapping, container.Environment)
 			}
+		})
+	}
+}
+
+func TestGenerateENIExtraHosts(t *testing.T) {
+	tests := []struct {
+		name     string
+		task     *Task
+		expected []string
+	}{
+		{
+			name: "nil ENI",
+			task: &Task{
+				ENIs: nil,
+			},
+			expected: nil,
+		},
+		{
+			name: "empty hostname",
+			task: &Task{
+				ENIs: TaskENIs{
+					&ni.NetworkInterface{
+						PrivateDNSName: "",
+						IPV4Addresses: []*ni.IPV4Address{
+							{Address: "192.168.1.1"},
+						},
+					},
+				},
+			},
+			expected: nil,
+		},
+		{
+			name: "IPv4 addresses only",
+			task: &Task{
+				ENIs: TaskENIs{
+					&ni.NetworkInterface{
+						PrivateDNSName: "test.local",
+						IPV4Addresses: []*ni.IPV4Address{
+							{Address: "192.168.1.1"},
+							{Address: "192.168.1.2"},
+						},
+					},
+				},
+			},
+			expected: []string{
+				"test.local:192.168.1.1",
+				"test.local:192.168.1.2",
+			},
+		},
+		{
+			name: "IPv6 only",
+			task: &Task{
+				ENIs: TaskENIs{
+					&ni.NetworkInterface{
+						PrivateDNSName: "test.local",
+						IPV6Addresses: []*ni.IPV6Address{
+							{Address: "2001:db8::1"},
+							{Address: "2001:db8::2"},
+						},
+					},
+				},
+			},
+			expected: []string{
+				"test.local:2001:db8::1",
+				"test.local:2001:db8::2",
+			},
+		},
+		{
+			name: "dual stack (should use IPv4)",
+			task: &Task{
+				ENIs: TaskENIs{
+					&ni.NetworkInterface{
+						PrivateDNSName: "test.local",
+						IPV4Addresses: []*ni.IPV4Address{
+							{Address: "192.168.1.1"},
+						},
+						IPV6Addresses: []*ni.IPV6Address{
+							{Address: "2001:db8::1"},
+						},
+					},
+				},
+			},
+			expected: []string{
+				"test.local:192.168.1.1",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.task.generateENIExtraHosts()
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

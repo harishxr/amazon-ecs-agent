@@ -26,7 +26,6 @@ import (
 	"time"
 
 	asmfactory "github.com/aws/amazon-ecs-agent/agent/asm/factory"
-	"github.com/aws/amazon-ecs-agent/agent/config/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/agent/s3"
 	s3factory "github.com/aws/amazon-ecs-agent/agent/s3/factory"
 	"github.com/aws/amazon-ecs-agent/agent/ssm"
@@ -34,9 +33,10 @@ import (
 	"github.com/aws/amazon-ecs-agent/agent/utils/ioutilwrapper"
 	"github.com/aws/amazon-ecs-agent/agent/utils/oswrapper"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	internalarn "github.com/aws/amazon-ecs-agent/ecs-agent/utils/arn"
-	"github.com/aws/aws-sdk-go/aws/arn"
 
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/cihub/seelog"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/windows/registry"
@@ -305,7 +305,11 @@ func (cs *CredentialSpecResource) handleSSMCredentialspecFile(originalCredential
 		return err
 	}
 
-	ssmClient := cs.ssmClientCreator.NewSSMClient(cs.region, iamCredentials)
+	ssmClient, err := cs.ssmClientCreator.NewSSMClient(cs.region, iamCredentials, cs.ipCompatibility)
+	if err != nil {
+		cs.setTerminalReason(err.Error())
+		return err
+	}
 
 	// An SSM ARN is in the form of arn:aws:ssm:us-west-2:123456789012:parameter/a/b. The parsed ARN value
 	// would be parameter/a/b. The following code gets the SSM parameter by passing "/a/b" value to the

@@ -23,10 +23,10 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/aws/amazon-ecs-agent/agent/config/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient"
 	"github.com/aws/amazon-ecs-agent/agent/utils"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/ec2"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/logger"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/tmds"
 
@@ -98,7 +98,7 @@ var (
 )
 
 // DefaultConfig returns the default configuration for Windows
-func DefaultConfig() Config {
+func DefaultConfig(instanceIPCompatibility ipcompatibility.IPCompatibility) Config {
 	programData := utils.DefaultIfBlank(os.Getenv("ProgramData"), `C:\ProgramData`)
 	ecsRoot := filepath.Join(programData, "Amazon", "ECS")
 	dataDir := filepath.Join(ecsRoot, "data")

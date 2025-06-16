@@ -16,26 +16,25 @@ package types
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"strconv"
 
-	"github.com/aws/amazon-ecs-agent/ecs-agent/logger"
-	"github.com/aws/amazon-ecs-agent/ecs-agent/logger/field"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/tmds/utils"
 	"github.com/aws/aws-sdk-go-v2/aws"
 )
 
 const (
-	BlackHolePortFaultType    = "network-blackhole-port"
-	LatencyFaultType          = "network-latency"
-	PacketLossFaultType       = "network-packet-loss"
-	StartNetworkFaultPostfix  = "start"
-	StopNetworkFaultPostfix   = "stop"
-	CheckNetworkFaultPostfix  = "status"
-	missingRequiredFieldError = "required parameter %s is missing"
+	BlackHolePortFaultType   = "network-blackhole-port"
+	LatencyFaultType         = "network-latency"
+	PacketLossFaultType      = "network-packet-loss"
+	StartNetworkFaultPostfix = "start"
+	StopNetworkFaultPostfix  = "stop"
+	CheckNetworkFaultPostfix = "status"
+	TrafficTypeIngress       = "ingress"
+	TrafficTypeEgress        = "egress"
+	// Request Payload Errors
+	MissingRequiredFieldError = "required parameter %s is missing"
 	MissingRequestBodyError   = "required request body is missing"
-	invalidValueError         = "invalid value %s for parameter %s"
-	TrafficTypeIngress        = "ingress"
-	TrafficTypeEgress         = "egress"
+	InvalidValueError         = "invalid value %s for parameter %s"
 )
 
 type NetworkFaultRequest interface {
@@ -47,7 +46,7 @@ type NetworkBlackholePortRequest struct {
 	Port        *uint16 `json:"Port"`
 	Protocol    *string `json:"Protocol"`
 	TrafficType *string `json:"TrafficType"`
-	// SourcesToFilter is a list including IPv4 addresses or IPv4 CIDR blocks that will be excluded
+	// SourcesToFilter is a list including IPv4/IPv6 addresses or IPv4/IPv6 CIDR blocks that will be excluded
 	// from the fault.
 	SourcesToFilter []*string `json:"SourcesToFilter,omitempty"`
 }
@@ -59,23 +58,23 @@ type NetworkFaultInjectionResponse struct {
 
 func (request NetworkBlackholePortRequest) ValidateRequest() error {
 	if request.Port == nil {
-		return fmt.Errorf(missingRequiredFieldError, "Port")
+		return fmt.Errorf(MissingRequiredFieldError, "Port")
 	}
 	if request.Protocol == nil || *request.Protocol == "" {
-		return fmt.Errorf(missingRequiredFieldError, "Protocol")
+		return fmt.Errorf(MissingRequiredFieldError, "Protocol")
 	}
 	if request.TrafficType == nil || *request.TrafficType == "" {
-		return fmt.Errorf(missingRequiredFieldError, "TrafficType")
+		return fmt.Errorf(MissingRequiredFieldError, "TrafficType")
 	}
 
 	if *request.Protocol != "tcp" && *request.Protocol != "udp" {
-		return fmt.Errorf(invalidValueError, *request.Protocol, "Protocol")
+		return fmt.Errorf(InvalidValueError, *request.Protocol, "Protocol")
 	}
 
 	if *request.TrafficType != TrafficTypeIngress && *request.TrafficType != TrafficTypeEgress {
-		return fmt.Errorf(invalidValueError, *request.TrafficType, "TrafficType")
+		return fmt.Errorf(InvalidValueError, *request.TrafficType, "TrafficType")
 	}
-	if err := validateNetworkFaultRequestSources(request.SourcesToFilter, "SourcesToFilter"); err != nil {
+	if err := requireIPInRequestSources(request.SourcesToFilter, "SourcesToFilter"); err != nil {
 		return err
 	}
 
@@ -125,18 +124,18 @@ type NetworkLatencyRequest struct {
 // ValidateRequest validates required fields are present and its value.
 func (request NetworkLatencyRequest) ValidateRequest() error {
 	if request.DelayMilliseconds == nil {
-		return fmt.Errorf(missingRequiredFieldError, "DelayMilliseconds")
+		return fmt.Errorf(MissingRequiredFieldError, "DelayMilliseconds")
 	}
 	if request.JitterMilliseconds == nil {
-		return fmt.Errorf(missingRequiredFieldError, "JitterMilliseconds")
+		return fmt.Errorf(MissingRequiredFieldError, "JitterMilliseconds")
 	}
 	if len(request.Sources) == 0 {
-		return fmt.Errorf(missingRequiredFieldError, "Sources")
+		return fmt.Errorf(MissingRequiredFieldError, "Sources")
 	}
-	if err := validateNetworkFaultRequestSources(request.Sources, "Sources"); err != nil {
+	if err := requireIPInRequestSources(request.Sources, "Sources"); err != nil {
 		return err
 	}
-	if err := validateNetworkFaultRequestSources(request.SourcesToFilter, "SourcesToFilter"); err != nil {
+	if err := requireIPInRequestSources(request.SourcesToFilter, "SourcesToFilter"); err != nil {
 		return err
 	}
 	return nil
@@ -163,19 +162,19 @@ type NetworkPacketLossRequest struct {
 // ValidateRequest validates required fields are present and its value.
 func (request NetworkPacketLossRequest) ValidateRequest() error {
 	if request.LossPercent == nil {
-		return fmt.Errorf(missingRequiredFieldError, "LossPercent")
+		return fmt.Errorf(MissingRequiredFieldError, "LossPercent")
 	}
 	// request.LossPercent should be an integer between 1 and 100 (inclusive).
 	if *request.LossPercent < 1 || *request.LossPercent > 100 {
-		return fmt.Errorf(invalidValueError, strconv.Itoa(int(*request.LossPercent)), "LossPercent")
+		return fmt.Errorf(InvalidValueError, strconv.Itoa(int(*request.LossPercent)), "LossPercent")
 	}
 	if len(request.Sources) == 0 {
-		return fmt.Errorf(missingRequiredFieldError, "Sources")
+		return fmt.Errorf(MissingRequiredFieldError, "Sources")
 	}
-	if err := validateNetworkFaultRequestSources(request.Sources, "Sources"); err != nil {
+	if err := requireIPInRequestSources(request.Sources, "Sources"); err != nil {
 		return err
 	}
-	if err := validateNetworkFaultRequestSources(request.SourcesToFilter, "SourcesToFilter"); err != nil {
+	if err := requireIPInRequestSources(request.SourcesToFilter, "SourcesToFilter"); err != nil {
 		return err
 	}
 	return nil
@@ -201,31 +200,24 @@ func NewNetworkFaultInjectionErrorResponse(err string) NetworkFaultInjectionResp
 	}
 }
 
-func validateNetworkFaultRequestSources(sources []*string, sourcesType string) error {
+// requireIPInRequestSources requires each source is IPv4/IPv6 or IPv4/IPv6 CIDR block.
+func requireIPInRequestSources(sources []*string, sourcesType string) error {
 	for _, element := range sources {
-		if err := validateNetworkFaultRequestSource(aws.ToString(element), sourcesType); err != nil {
+		if err := requireIPInRequestSource(aws.ToString(element), sourcesType); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateNetworkFaultRequestSource(source string, sourceType string) error {
-	ip := net.ParseIP(source)
-	if ip != nil && ip.To4() != nil {
-		return nil // IPv4 successful
+// requireIPInRequestSource requires the source is IPv4/IPv6 or IPv4/IPv6 CIDR block.
+func requireIPInRequestSource(source string, sourceType string) error {
+	if utils.IsIPv4(source) ||
+		utils.IsIPv6(source) ||
+		utils.IsIPv4CIDR(source) ||
+		utils.IsIPv6CIDR(source) {
+		return nil
 	}
 
-	_, ipnet, err := net.ParseCIDR(source)
-	if err == nil && ipnet.IP.To4() != nil {
-		return nil // IPv4 CIDR successful
-	}
-	if err != nil {
-		logger.Info("Failed to parse fault source as IPv4 CIDR block", logger.Fields{
-			"source":    source,
-			field.Error: err,
-		})
-	}
-
-	return fmt.Errorf(invalidValueError, source, sourceType)
+	return fmt.Errorf(InvalidValueError, source, sourceType)
 }

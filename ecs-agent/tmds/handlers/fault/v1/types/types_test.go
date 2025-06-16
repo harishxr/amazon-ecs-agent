@@ -43,23 +43,26 @@ func TestNetworkBlackholePortAddSourceToFilterIfNotAlready(t *testing.T) {
 	})
 }
 
-// Tests for validateNetworkFaultRequestSource function that parses IPv4 and IPv4 CIDR blocks.
-func TestValidateNetworkFaultRequestSources(t *testing.T) {
+func TestRequireIPInRequestSources(t *testing.T) {
 	tcs := []struct {
 		Name          string
 		Input         string
 		ShouldSucceed bool
 	}{
-		{"IPv4", "1.2.3.4", true},
-		{"IPv4 CIDR", "1.2.3.4/10", true},
-		{"IPv6", "2001:db8::68", false},
-		{"IPv6 CIDR", "::1/128", false},
-		{"invalid input", "invalid", false},
-		{"empty input", "", false},
+		{"Valid IPv4", "1.2.3.4", true},
+		{"Valid IPv4 CIDR", "1.2.3.4/10", true},
+		{"Valid IPv6", "2001:db8::1", true},
+		{"Valid full IPv6", "2001:0db8:0000:0000:0000:0000:0000:0001", true},
+		{"Valid IPv6 CIDR", "::1/128", true},
+		{"Invalid input", "invalid", false},
+		{"Invalid IPv6", "2001:db8::1::1", false},
+		{"IPv4 with invalid CIDR", "192.168.1.0/", false},
+		{"IPv6 with invalid CIDR", "2001:db8::/129", false},
+		{"Empty input", "", false},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.Name, func(t *testing.T) {
-			err := validateNetworkFaultRequestSource(tc.Input, "input")
+			err := requireIPInRequestSource(tc.Input, "input")
 			if tc.ShouldSucceed {
 				require.NoError(t, err)
 			} else {

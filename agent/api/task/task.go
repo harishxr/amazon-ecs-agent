@@ -27,7 +27,6 @@ import (
 	apicontainer "github.com/aws/amazon-ecs-agent/agent/api/container"
 	"github.com/aws/amazon-ecs-agent/agent/api/serviceconnect"
 	"github.com/aws/amazon-ecs-agent/agent/config"
-	"github.com/aws/amazon-ecs-agent/agent/config/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient/dockerapi"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource"
@@ -47,6 +46,7 @@ import (
 	apierrors "github.com/aws/amazon-ecs-agent/ecs-agent/api/errors"
 	apitaskstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/task/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/logger"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/logger/field"
 	nlappmesh "github.com/aws/amazon-ecs-agent/ecs-agent/netlib/model/appmesh"
@@ -57,7 +57,6 @@ import (
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go/private/protocol/json/jsonutil"
 	"github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
@@ -315,7 +314,7 @@ type Task struct {
 // TaskFromACS translates ecsacs.Task to apitask.Task by first marshaling the received
 // ecsacs.Task to json and unmarshalling it as apitask.Task
 func TaskFromACS(acsTask *ecsacs.Task, envelope *ecsacs.PayloadMessage) (*Task, error) {
-	data, err := jsonutil.BuildJSON(acsTask)
+	data, err := json.Marshal(acsTask)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +416,7 @@ func (task *Task) PostUnmarshalTask(cfg *config.Config,
 		return apierrors.NewResourceInitError(task.Arn, err)
 	}
 
-	task.initSecretResources(credentialsManager, resourceFields)
+	task.initSecretResources(cfg, credentialsManager, resourceFields)
 
 	task.initializeCredentialsEndpoint(credentialsManager)
 
@@ -652,14 +651,14 @@ func (task *Task) populateTaskARN() {
 	}
 }
 
-func (task *Task) initSecretResources(credentialsManager credentials.Manager,
+func (task *Task) initSecretResources(cfg *config.Config, credentialsManager credentials.Manager,
 	resourceFields *taskresource.ResourceFields) {
 	if task.requiresASMDockerAuthData() {
 		task.initializeASMAuthResource(credentialsManager, resourceFields)
 	}
 
 	if task.requiresSSMSecret() {
-		task.initializeSSMSecretResource(credentialsManager, resourceFields)
+		task.initializeSSMSecretResource(cfg, credentialsManager, resourceFields)
 	}
 
 	if task.requiresASMSecret() {
@@ -1110,10 +1109,11 @@ func (task *Task) requiresSSMSecret() bool {
 }
 
 // initializeSSMSecretResource builds the resource dependency map for the SSM ssmsecret resource
-func (task *Task) initializeSSMSecretResource(credentialsManager credentials.Manager,
+func (task *Task) initializeSSMSecretResource(cfg *config.Config,
+	credentialsManager credentials.Manager,
 	resourceFields *taskresource.ResourceFields) {
 	ssmSecretResource := ssmsecret.NewSSMSecretResource(task.Arn, task.getAllSSMSecretRequirements(),
-		task.ExecutionCredentialsID, credentialsManager, resourceFields.SSMClientCreator)
+		task.ExecutionCredentialsID, credentialsManager, resourceFields.SSMClientCreator, cfg.InstanceIPCompatibility)
 	task.AddResource(ssmsecret.ResourceName, ssmSecretResource)
 
 	// for every container that needs ssm secret vending as env, it needs to wait all secrets got retrieved
@@ -2195,10 +2195,18 @@ func (task *Task) generateENIExtraHosts() []string {
 
 	extraHosts := []string{}
 
-	for _, ip := range eni.GetIPV4Addresses() {
+	ipAddresses := eni.GetIPV4Addresses()
+	if eni.IPv6Only() {
+		// Use IPv6 addresses only if task ENI is IPv6-only.
+		// Historically, IPv6 addresses are not added for dual stack ENIs.
+		ipAddresses = eni.GetIPV6Addresses()
+	}
+
+	for _, ip := range ipAddresses {
 		host := fmt.Sprintf("%s:%s", hostname, ip)
 		extraHosts = append(extraHosts, host)
 	}
+
 	return extraHosts
 }
 

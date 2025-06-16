@@ -23,27 +23,27 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/pborman/uuid"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/arn"
-	"github.com/aws/aws-sdk-go/aws/endpoints"
-
 	apicontainer "github.com/aws/amazon-ecs-agent/agent/api/container"
 	apiserviceconnect "github.com/aws/amazon-ecs-agent/agent/api/serviceconnect"
 	apitask "github.com/aws/amazon-ecs-agent/agent/api/task"
 	"github.com/aws/amazon-ecs-agent/agent/config"
-	"github.com/aws/amazon-ecs-agent/agent/config/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient/dockerapi"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource"
 	"github.com/aws/amazon-ecs-agent/agent/utils/loader"
+	apicontainerrestart "github.com/aws/amazon-ecs-agent/ecs-agent/api/container/restart"
 	apicontainerstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/container/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/api/ecs"
 	apitaskstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/task/status"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/awsrulesfn"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/logger"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/logger/field"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
+	"github.com/pborman/uuid"
 )
 
 const (
@@ -217,17 +217,17 @@ func getRegionFromContainerInstanceARN(containerInstanceARN string) string {
 }
 
 func isIsoRegion(region string) bool {
-	partition, ok := endpoints.PartitionForRegion(endpoints.DefaultPartitions(), region)
-	if !ok {
+	partition := awsrulesfn.GetPartitionForRegion(region)
+	if partition == nil {
 		// if partition is not found, assume it's iso
 		return true
 	}
-	switch partition.ID() {
-	case endpoints.AwsPartitionID:
+	switch partition.ID {
+	case awsrulesfn.AwsPartitionID:
 		return false
-	case endpoints.AwsUsGovPartitionID:
+	case awsrulesfn.AwsUsGovPartitionID:
 		return false
-	case endpoints.AwsCnPartitionID:
+	case awsrulesfn.AwsCnPartitionID:
 		return false
 	default:
 		// region partition is not 'aws', 'aws-us-gov', nor 'aws-cn', so assume it's
@@ -361,12 +361,6 @@ func (m *manager) CreateInstanceTask(cfg *config.Config) (*apitask.Task, error) 
 	containerRunning := apicontainerstatus.ContainerRunning
 	dockerHostConfig := dockercontainer.HostConfig{
 		NetworkMode: apitask.HostNetworkMode,
-		// do not restart relay if it's stopped manually.
-		// the default value of 0 for MaximumRetryCount means that we will not enforce a maximum count
-		RestartPolicy: dockercontainer.RestartPolicy{
-			Name:              "on-failure",
-			MaximumRetryCount: 0,
-		},
 	}
 	rawHostConfig, err := json.Marshal(&dockerHostConfig)
 	if err != nil {
@@ -403,6 +397,12 @@ func (m *manager) CreateInstanceTask(cfg *config.Config) (*apitask.Task, error) 
 			TransitionDependenciesMap: make(map[apicontainerstatus.ContainerStatus]apicontainer.TransitionDependencySet),
 			Essential:                 true,
 			SteadyStateStatusUnsafe:   &containerRunning,
+			// Restart Relay if it exits or crashes
+			// RestartAttemptPeriod value 60 ensures it has run for atleast 60 seconds and prevents a crash/restart loop
+			RestartPolicy: &apicontainerrestart.RestartPolicy{
+				Enabled:              true,
+				RestartAttemptPeriod: 60,
+			},
 			DockerConfig: apicontainer.DockerConfig{
 				Config:     aws.String(rawConfig),
 				HostConfig: aws.String(string(rawHostConfig)),

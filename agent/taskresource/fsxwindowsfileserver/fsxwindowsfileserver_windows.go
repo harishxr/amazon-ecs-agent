@@ -24,22 +24,23 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/amazon-ecs-agent/agent/asm"
-	"github.com/aws/amazon-ecs-agent/agent/config"
-	"github.com/aws/amazon-ecs-agent/agent/ssm"
-	"github.com/aws/amazon-ecs-agent/agent/utils"
-	"github.com/aws/aws-sdk-go/aws/arn"
-
 	apicontainer "github.com/aws/amazon-ecs-agent/agent/api/container"
+	"github.com/aws/amazon-ecs-agent/agent/asm"
 	asmfactory "github.com/aws/amazon-ecs-agent/agent/asm/factory"
+	"github.com/aws/amazon-ecs-agent/agent/config"
 	"github.com/aws/amazon-ecs-agent/agent/fsx"
 	fsxfactory "github.com/aws/amazon-ecs-agent/agent/fsx/factory"
+	"github.com/aws/amazon-ecs-agent/agent/ssm"
 	ssmfactory "github.com/aws/amazon-ecs-agent/agent/ssm/factory"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource"
 	resourcestatus "github.com/aws/amazon-ecs-agent/agent/taskresource/status"
+	"github.com/aws/amazon-ecs-agent/agent/utils"
 	apicontainerstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/container/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/api/task/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
+
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/cihub/seelog"
 	"github.com/pkg/errors"
 )
@@ -66,6 +67,7 @@ type FSxWindowsFileServerResource struct {
 	asmClientCreator asmfactory.ClientCreator
 	// fsxClientCreator is a factory interface that creates new FSx clients.
 	fsxClientCreator fsxfactory.FSxClientCreator
+	ipCompatibility  ipcompatibility.IPCompatibility
 
 	// fields that are set later during resource creation
 	FSxWindowsFileServerDNSName string
@@ -114,7 +116,8 @@ func NewFSxWindowsFileServerResource(
 	credentialsManager credentials.Manager,
 	ssmClientCreator ssmfactory.SSMClientCreator,
 	asmClientCreator asmfactory.ClientCreator,
-	fsxClientCreator fsxfactory.FSxClientCreator) (*FSxWindowsFileServerResource, error) {
+	fsxClientCreator fsxfactory.FSxClientCreator,
+	ipCompatibility ipcompatibility.IPCompatibility) (*FSxWindowsFileServerResource, error) {
 
 	fv := &FSxWindowsFileServerResource{
 		Name:       name,
@@ -131,6 +134,7 @@ func NewFSxWindowsFileServerResource(
 		ssmClientCreator:       ssmClientCreator,
 		asmClientCreator:       asmClientCreator,
 		fsxClientCreator:       fsxClientCreator,
+		ipCompatibility:        ipCompatibility,
 	}
 
 	fv.initStatusToTransition()
@@ -147,6 +151,7 @@ func (fv *FSxWindowsFileServerResource) Initialize(
 	fv.ssmClientCreator = resourceFields.SSMClientCreator
 	fv.asmClientCreator = resourceFields.ASMClientCreator
 	fv.fsxClientCreator = resourceFields.FSxClientCreator
+	fv.ipCompatibility = config.InstanceIPCompatibility
 	fv.initStatusToTransition()
 }
 
@@ -480,7 +485,10 @@ func (fv *FSxWindowsFileServerResource) retrieveSSMCredentials(credentialsParame
 		return err
 	}
 
-	ssmClient := fv.ssmClientCreator.NewSSMClient(fv.region, iamCredentials)
+	ssmClient, err := fv.ssmClientCreator.NewSSMClient(fv.region, iamCredentials, fv.ipCompatibility)
+	if err != nil {
+		return err
+	}
 	// parsedARN.Resource looks like "arn:aws:ssm:us-west-2:123456789012:parameter/sample1/sample2/parameter1"
 	// We cut by parameter and get "arn:aws:ssm:us-west-2:123456789012:parameter", "/sample1/sample2/parameter1", True/False
 	_, ssmParamName, found := strings.Cut(parsedARN.Resource, "parameter")
@@ -535,7 +543,11 @@ func (fv *FSxWindowsFileServerResource) retrieveASMCredentials(credentialsParame
 
 func (fv *FSxWindowsFileServerResource) retrieveFileSystemDNSName(fileSystemId string, iamCredentials credentials.IAMRoleCredentials) error {
 	fileSystemIds := []string{fileSystemId}
-	fsxClient := fv.fsxClientCreator.NewFSxClient(fv.region, iamCredentials)
+	fsxClient, err := fv.fsxClientCreator.NewFSxClient(fv.region, iamCredentials)
+	if err != nil {
+		fv.setTerminalReason(err.Error())
+		return err
+	}
 	fileSystemDNSMap, err := fsx.GetFileSystemDNSNames(fileSystemIds, fsxClient)
 	if err != nil {
 		fv.setTerminalReason(err.Error())

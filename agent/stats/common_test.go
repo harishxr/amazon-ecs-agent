@@ -29,6 +29,7 @@ import (
 	dm "github.com/aws/amazon-ecs-agent/agent/engine/daemonmanager"
 	"github.com/aws/amazon-ecs-agent/agent/statechange"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/eventstream"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/tcs/model/ecstcs"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -65,7 +66,7 @@ const (
 )
 
 var (
-	cfg                      = config.DefaultConfig()
+	cfg                      = config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 	defaultCluster           = "default"
 	defaultContainerInstance = "ci"
 )
@@ -281,7 +282,7 @@ func validateContainerHealthMetrics(metrics []*ecstcs.ContainerHealth, expected 
 		if aws.ToString(health.HealthStatus) == "" {
 			return fmt.Errorf("container health status is empty")
 		}
-		if aws.ToTime(health.StatusSince).IsZero() {
+		if aws.ToTime((*time.Time)(health.StatusSince)).IsZero() {
 			return fmt.Errorf("container health status change timestamp is empty")
 		}
 	}

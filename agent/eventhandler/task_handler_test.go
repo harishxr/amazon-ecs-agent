@@ -41,8 +41,8 @@ import (
 	ni "github.com/aws/amazon-ecs-agent/ecs-agent/netlib/model/networkinterface"
 	mock_retry "github.com/aws/amazon-ecs-agent/ecs-agent/utils/retry/mock"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/smithy-go"
 	"github.com/golang/mock/gomock"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
@@ -122,7 +122,10 @@ func TestSendsEventsInvalidParametersEventsRemoved(t *testing.T) {
 	client.EXPECT().SubmitTaskStateChange(gomock.Any()).Do(func(interface{}) {
 		assert.Equal(t, 1, handler.tasksToEvents[taskARN].events.Len())
 		wg.Done()
-	}).Return(awserr.New(apierrors.ErrCodeInvalidParameterException, "", nil))
+	}).Return(&smithy.GenericAPIError{
+		Code:    apierrors.ErrCodeInvalidParameterException,
+		Message: "",
+	})
 
 	handler.AddStateChangeEvent(taskEvent, client)
 
@@ -190,8 +193,8 @@ func TestSendsEventsContainerDifferences(t *testing.T) {
 
 	client.EXPECT().SubmitTaskStateChange(gomock.Any()).Do(func(change ecs.TaskStateChange) {
 		assert.Equal(t, taskARN, change.TaskARN)
-		assert.Equal(t, apicontainerstatus.ContainerRunning.String(), aws.StringValue(change.Containers[0].Status))
-		assert.Equal(t, apicontainerstatus.ContainerStopped.String(), aws.StringValue(change.Containers[1].Status))
+		assert.Equal(t, apicontainerstatus.ContainerRunning.String(), aws.ToString(change.Containers[0].Status))
+		assert.Equal(t, apicontainerstatus.ContainerStopped.String(), aws.ToString(change.Containers[1].Status))
 		wg.Done()
 	})
 

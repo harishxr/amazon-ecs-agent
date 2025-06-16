@@ -37,7 +37,7 @@ const (
 	deviceName            = "eth1"
 	eniMAC                = "f0:5c:89:a3:ab:01"
 	subnetGatewayIPv4CIDR = "10.1.0.1/24"
-	subnetGatewayIPv6CIDR = "2600:1f14:30ab:6902::/64"
+	subnetGatewayIPv6CIDR = "2600:1f14:30ab:6902::/60"
 	primaryENIName        = "primary-eni"
 	secondaryENIName      = "secondary-eni"
 )
@@ -104,9 +104,9 @@ func getTestIPv6OnlyInterface() *networkinterface.NetworkInterface {
 				Address:  addr2,
 			},
 		},
-		DomainNameSearchList: []string{searchDomainName, searchDomainName2},
-		DeviceName:           deviceName,
-		// TODO: add 'SubnetGatewayIPV6Address:     subnetGatewayIPv6CIDR,'
+		DomainNameSearchList:         []string{searchDomainName, searchDomainName2},
+		DeviceName:                   deviceName,
+		SubnetGatewayIPV6Address:     subnetGatewayIPv6CIDR,
 		InterfaceAssociationProtocol: networkinterface.DefaultInterfaceAssociationProtocol,
 		KnownStatus:                  status.NetworkNone,
 		DesiredStatus:                status.NetworkReadyPull,
@@ -150,10 +150,10 @@ func getTestDualStackInterface() *networkinterface.NetworkInterface {
 				Address:  addr2,
 			},
 		},
-		DomainNameSearchList:     []string{searchDomainName, searchDomainName2},
-		DeviceName:               deviceName,
-		SubnetGatewayIPV4Address: subnetGatewayIPv4CIDR,
-		// TODO: add 'SubnetGatewayIPV6Address:     subnetGatewayIPv6CIDR,'
+		DomainNameSearchList:         []string{searchDomainName, searchDomainName2},
+		DeviceName:                   deviceName,
+		SubnetGatewayIPV4Address:     subnetGatewayIPv4CIDR,
+		SubnetGatewayIPV6Address:     subnetGatewayIPv6CIDR,
 		InterfaceAssociationProtocol: networkinterface.DefaultInterfaceAssociationProtocol,
 		KnownStatus:                  status.NetworkNone,
 		DesiredStatus:                status.NetworkReadyPull,

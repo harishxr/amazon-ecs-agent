@@ -45,6 +45,8 @@ type NetworkInterface struct {
 	IPV6Addresses []*IPV6Address
 	// SubnetGatewayIPV4Address is the IPv4 address of the subnet gateway of the NetworkInterface
 	SubnetGatewayIPV4Address string `json:",omitempty"`
+	// SubnetGatewayIPV6Address is the IPv6 address of the subnet gateway of the NetworkInterface
+	SubnetGatewayIPV6Address string `json:",omitempty`
 	// DomainNameServers specifies the nameserver IP addresses for the eni
 	DomainNameServers []string `json:",omitempty"`
 	// DomainNameSearchList specifies the search list for the domain
@@ -246,8 +248,16 @@ func (ni *NetworkInterface) GetIPAddressesWithPrefixLength() []string {
 	for _, addr := range ni.IPV4Addresses {
 		addresses = append(addresses, addr.Address+"/"+ni.GetIPv4SubnetPrefixLength())
 	}
-	for _, addr := range ni.IPV6Addresses {
-		addresses = append(addresses, addr.Address+"/"+IPv6SubnetPrefixLength)
+
+	if ni.IPv6Only() {
+		for _, addr := range ni.IPV6Addresses {
+			addresses = append(addresses, addr.Address+"/"+ni.GetIPv6SubnetPrefixLength())
+		}
+	} else {
+		// To be backwards compatible, we should use this for dual stack tasks.
+		for _, addr := range ni.IPV6Addresses {
+			addresses = append(addresses, addr.Address+"/"+IPv6SubnetPrefixLength)
+		}
 	}
 
 	return addresses
@@ -260,6 +270,15 @@ func (ni *NetworkInterface) GetIPv4SubnetPrefixLength() string {
 	}
 
 	return ni.ipv4SubnetPrefixLength
+}
+
+// GetIPv6SubnetPrefixLength returns the IPv6 prefix length of the NetworkInterface's subnet.
+func (ni *NetworkInterface) GetIPv6SubnetPrefixLength() string {
+	prefixLen := IPv6SubnetPrefixLength
+	if strings.Contains(ni.SubnetGatewayIPV6Address, "/") {
+		prefixLen = strings.Split(ni.SubnetGatewayIPV6Address, "/")[1]
+	}
+	return prefixLen
 }
 
 // GetIPv4SubnetCIDRBlock returns the IPv4 CIDR block, if any, of the NetworkInterface's subnet.
@@ -277,7 +296,12 @@ func (ni *NetworkInterface) GetIPv4SubnetCIDRBlock() string {
 // GetIPv6SubnetCIDRBlock returns the IPv6 CIDR block, if any, of the NetworkInterface's subnet.
 func (ni *NetworkInterface) GetIPv6SubnetCIDRBlock() string {
 	if ni.ipv6SubnetCIDRBlock == "" && len(ni.IPV6Addresses) > 0 {
-		ipv6Addr := ni.IPV6Addresses[0].Address + "/" + IPv6SubnetPrefixLength
+		// Hardcoded prefix length is used for dual-stack ENIs for historical reasons
+		prefixLength := IPv6SubnetPrefixLength
+		if ni.IPv6Only() {
+			prefixLength = ni.GetIPv6SubnetPrefixLength()
+		}
+		ipv6Addr := ni.IPV6Addresses[0].Address + "/" + prefixLength
 		_, ipv6Net, err := net.ParseCIDR(ipv6Addr)
 		if err == nil {
 			ni.ipv6SubnetCIDRBlock = ipv6Net.String()
@@ -292,6 +316,16 @@ func (ni *NetworkInterface) GetSubnetGatewayIPv4Address() string {
 	var gwAddr string
 	if ni.SubnetGatewayIPV4Address != "" {
 		gwAddr = strings.Split(ni.SubnetGatewayIPV4Address, "/")[0]
+	}
+
+	return gwAddr
+}
+
+// GetSubnetGatewayIPv6Address returns the subnet gateway IPv6 address for the NetworkInterface.
+func (ni *NetworkInterface) GetSubnetGatewayIPv6Address() string {
+	var gwAddr string
+	if ni.SubnetGatewayIPV6Address != "" {
+		gwAddr = strings.Split(ni.SubnetGatewayIPV6Address, "/")[0]
 	}
 
 	return gwAddr
@@ -374,9 +408,10 @@ func (ni *NetworkInterface) String() string {
 
 	return fmt.Sprintf(
 		"eni id:%s, mac: %s, hostname: %s, ipv4addresses: [%s], ipv6addresses: [%s], dns: [%s], dns search: [%s],"+
-			" gateway ipv4: [%s][%s]", ni.ID, ni.MacAddress, ni.GetHostname(), strings.Join(ipv4Addresses, ","),
+			" gateway ipv4: [%s], gateway ipv6: [%s][%s]", ni.ID, ni.MacAddress, ni.GetHostname(), strings.Join(ipv4Addresses, ","),
 		strings.Join(ipv6Addresses, ","), strings.Join(ni.DomainNameServers, ","),
-		strings.Join(ni.DomainNameSearchList, ","), ni.SubnetGatewayIPV4Address, eniString)
+		strings.Join(ni.DomainNameSearchList, ","), ni.SubnetGatewayIPV4Address,
+		ni.SubnetGatewayIPV6Address, eniString)
 }
 
 // IPV4Address is the ipv4 information of the eni
@@ -414,14 +449,11 @@ func InterfaceFromACS(acsENI *ecsacs.ElasticNetworkInterface) (*NetworkInterface
 	}
 
 	// Read IPv6 address information of the NetworkInterface.
-	firstIpv6 := true
 	for _, ec2Ipv6 := range acsENI.Ipv6Addresses {
 		ipv6Addrs = append(ipv6Addrs, &IPV6Address{
-			// TODO: Primary field is not available yet so set the first one to be primary for now.
-			Primary: firstIpv6,
+			Primary: aws.ToBool(ec2Ipv6.Primary),
 			Address: aws.ToString(ec2Ipv6.Address),
 		})
-		firstIpv6 = false
 	}
 
 	ni := &NetworkInterface{
@@ -430,6 +462,7 @@ func InterfaceFromACS(acsENI *ecsacs.ElasticNetworkInterface) (*NetworkInterface
 		IPV4Addresses:                ipv4Addrs,
 		IPV6Addresses:                ipv6Addrs,
 		SubnetGatewayIPV4Address:     aws.ToString(acsENI.SubnetGatewayIpv4Address),
+		SubnetGatewayIPV6Address:     aws.ToString(acsENI.SubnetGatewayIpv6Address),
 		PrivateDNSName:               aws.ToString(acsENI.PrivateDnsName),
 		InterfaceAssociationProtocol: aws.ToString(acsENI.InterfaceAssociationProtocol),
 	}
@@ -455,9 +488,23 @@ func InterfaceFromACS(acsENI *ecsacs.ElasticNetworkInterface) (*NetworkInterface
 
 // ValidateENI validates the NetworkInterface information sent from ACS.
 func ValidateENI(acsENI *ecsacs.ElasticNetworkInterface) error {
+	var validateSubnetGatewayAddr = func(version, addr string) error {
+		s := strings.Split(addr, "/")
+		if len(s) != 2 {
+			return errors.Errorf(
+				"eni message validation: invalid subnet gateway %s address %s", version, addr)
+		}
+		return nil
+	}
+
 	ipv6OnlyTask := len(acsENI.Ipv6Addresses) > 0 && len(acsENI.Ipv4Addresses) == 0
 	if ipv6OnlyTask {
-		// TODO: check subnet gateway for IPv6
+		if acsENI.SubnetGatewayIpv6Address == nil {
+			return errors.Errorf("eni message validation: no subnet gateway ipv6 address in the message")
+		}
+		if err := validateSubnetGatewayAddr("ipv6", aws.ToString(acsENI.SubnetGatewayIpv6Address)); err != nil {
+			return err
+		}
 	} else {
 		// At least one IPv4 address should be associated with the NetworkInterface.
 		if len(acsENI.Ipv4Addresses) < 1 {
@@ -467,11 +514,8 @@ func ValidateENI(acsENI *ecsacs.ElasticNetworkInterface) error {
 		if acsENI.SubnetGatewayIpv4Address == nil {
 			return errors.Errorf("eni message validation: no subnet gateway ipv4 address in the message")
 		}
-		gwIPv4Addr := aws.ToString(acsENI.SubnetGatewayIpv4Address)
-		s := strings.Split(gwIPv4Addr, "/")
-		if len(s) != 2 {
-			return errors.Errorf(
-				"eni message validation: invalid subnet gateway ipv4 address %s", gwIPv4Addr)
+		if err := validateSubnetGatewayAddr("ipv4", aws.ToString(acsENI.SubnetGatewayIpv4Address)); err != nil {
+			return err
 		}
 	}
 

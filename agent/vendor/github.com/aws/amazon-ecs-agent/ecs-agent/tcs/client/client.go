@@ -16,6 +16,7 @@ package tcsclient
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,10 +29,9 @@ import (
 	"github.com/aws/amazon-ecs-agent/ecs-agent/tcs/model/ecstcs"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/utils"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/wsclient"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/private/protocol/json/jsonutil"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awscreds "github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/cihub/seelog"
 	"github.com/pborman/uuid"
 )
@@ -72,7 +72,7 @@ func New(url string,
 	doctor *doctor.Doctor,
 	disableResourceMetrics bool,
 	publishMetricsInterval time.Duration,
-	credentialProvider *credentials.Credentials,
+	credentialsCache *aws.CredentialsCache,
 	rwTimeout time.Duration,
 	metricsMessages <-chan ecstcs.TelemetryMessage,
 	healthMessages <-chan ecstcs.HealthMessage,
@@ -86,14 +86,14 @@ func New(url string,
 		health:                   healthMessages,
 		disableResourceMetrics:   disableResourceMetrics,
 		ClientServerImpl: wsclient.ClientServerImpl{
-			URL:                url,
-			Cfg:                cfg,
-			CredentialProvider: credentialProvider,
-			RWTimeout:          rwTimeout,
-			MakeRequestHook:    signRequestFunc(url, cfg.AWSRegion, credentialProvider),
-			TypeDecoder:        NewTCSDecoder(),
-			RequestHandlers:    make(map[string]wsclient.RequestHandler),
-			MetricsFactory:     metricsFactory,
+			URL:              url,
+			Cfg:              cfg,
+			CredentialsCache: credentialsCache,
+			RWTimeout:        rwTimeout,
+			MakeRequestHook:  signRequestFunc(url, cfg.AWSRegion, credentialsCache),
+			TypeDecoder:      NewTCSDecoder(),
+			RequestHandlers:  make(map[string]wsclient.RequestHandler),
+			MetricsFactory:   metricsFactory,
 		},
 	}
 	cs.ServiceError = &tcsError{}
@@ -214,7 +214,7 @@ func (cs *tcsClientServer) metricsToPublishMetricRequests(metrics ecstcs.Telemet
 		tempTaskMetric.ServiceConnectMetricsWrapper = tempTaskMetric.ServiceConnectMetricsWrapper[:0]
 
 		messageTaskMetrics = append(messageTaskMetrics, &tempTaskMetric)
-		tmsg, _ := jsonutil.BuildJSON(ecstcs.NewPublishMetricsRequest(messageInstanceMetrics, requestMetadata, copyTaskMetrics(messageTaskMetrics)))
+		tmsg, _ := json.Marshal(ecstcs.NewPublishMetricsRequest(messageInstanceMetrics, requestMetadata, copyTaskMetrics(messageTaskMetrics)))
 		// remove the tempTaskMetric added to messageTaskMetrics after creating tempMessage
 		messageTaskMetrics = messageTaskMetrics[:len(messageTaskMetrics)-1]
 		if len(tmsg) > publishMetricRequestSizeLimit {
@@ -266,8 +266,8 @@ func (cs *tcsClientServer) serviceConnectMetricsToPublishMetricRequests(instance
 		messageInstanceMetrics = filterInstanceMetrics(instanceMetrics, len(requests))
 		tempTaskMetric.ServiceConnectMetricsWrapper = append(tempTaskMetric.ServiceConnectMetricsWrapper, serviceConnectMetric)
 		messageTaskMetrics = append(messageTaskMetrics, &tempTaskMetric)
-		// TODO [SC]: Load test and profile this since BuildJSON results in lot of CPU and memory consumption.
-		tempMessage, _ := jsonutil.BuildJSON(ecstcs.NewPublishMetricsRequest(messageInstanceMetrics, requestMetadata, copyTaskMetrics(messageTaskMetrics)))
+		// TODO [SC]: Load test and profile this since json.Marshal(...) may result in lot of CPU and memory consumption.
+		tempMessage, _ := json.Marshal(ecstcs.NewPublishMetricsRequest(messageInstanceMetrics, requestMetadata, copyTaskMetrics(messageTaskMetrics)))
 		// remove the tempTaskMetric added to messageTaskMetrics after creating tempMessage
 		messageTaskMetrics = messageTaskMetrics[:len(messageTaskMetrics)-1]
 		if len(tempMessage) > publishMetricRequestSizeLimit {
@@ -368,10 +368,10 @@ func copyServiceConnectMetrics(scMetrics []*ecstcs.GeneralMetricsWrapper) []*ecs
 // copyHealthMetadata performs a deep copy of HealthMetadata object
 func copyHealthMetadata(metadata *ecstcs.HealthMetadata, fin bool) *ecstcs.HealthMetadata {
 	return &ecstcs.HealthMetadata{
-		Cluster:           aws.String(aws.StringValue(metadata.Cluster)),
-		ContainerInstance: aws.String(aws.StringValue(metadata.ContainerInstance)),
+		Cluster:           aws.String(aws.ToString(metadata.Cluster)),
+		ContainerInstance: aws.String(aws.ToString(metadata.ContainerInstance)),
 		Fin:               aws.Bool(fin),
-		MessageId:         aws.String(aws.StringValue(metadata.MessageId)),
+		MessageId:         aws.String(aws.ToString(metadata.MessageId)),
 	}
 }
 
@@ -461,7 +461,7 @@ func (cs *tcsClientServer) getPublishInstanceStatusRequest() (*ecstcs.PublishIns
 	return &ecstcs.PublishInstanceStatusRequest{
 		Metadata:  metadata,
 		Statuses:  instanceStatuses,
-		Timestamp: aws.Time(time.Now()),
+		Timestamp: (*utils.Timestamp)(aws.Time(time.Now())),
 	}, nil
 }
 
@@ -472,8 +472,8 @@ func (cs *tcsClientServer) getInstanceStatuses() []*ecstcs.InstanceStatus {
 
 	for _, healthcheck := range *cs.doctor.GetHealthchecks() {
 		instanceStatus := &ecstcs.InstanceStatus{
-			LastStatusChange: aws.Time(healthcheck.GetStatusChangeTime()),
-			LastUpdated:      aws.Time(healthcheck.GetLastHealthcheckTime()),
+			LastStatusChange: (*utils.Timestamp)(aws.Time(healthcheck.GetStatusChangeTime())),
+			LastUpdated:      (*utils.Timestamp)(aws.Time(healthcheck.GetLastHealthcheckTime())),
 			Status:           aws.String(healthcheck.GetHealthcheckStatus().String()),
 			Type:             aws.String(healthcheck.GetHealthcheckType()),
 		}
@@ -492,7 +492,7 @@ func (cs *tcsClientServer) Close() error {
 }
 
 // signRequestFunc is a MakeRequestHookFunc that signs each generated request
-func signRequestFunc(url, region string, credentialProvider *credentials.Credentials) wsclient.MakeRequestHookFunc {
+func signRequestFunc(url, region string, credentialsCache *aws.CredentialsCache) wsclient.MakeRequestHookFunc {
 	return func(payload []byte) ([]byte, error) {
 		reqBody := bytes.NewReader(payload)
 
@@ -501,8 +501,19 @@ func signRequestFunc(url, region string, credentialProvider *credentials.Credent
 			return nil, err
 		}
 
-		// TODO: Modify this to use SignHTTPRequest() once TCS has been migrated to use AWS SDK Go V2
-		err = utils.SignHTTPRequestV1(request, region, "ecs", credentialProvider, reqBody)
+		// hack to get v2 creds into v1 object.
+		// TODO: Can be removed once TCS adds support for AWS SDK v2 Credentials
+		credentialsProvider, err := credentialsCache.Retrieve(context.TODO())
+		if err != nil || !credentialsProvider.HasKeys() {
+			logger.Error("Error getting valid credentials", logger.Fields{
+				field.Error: err,
+			})
+			return nil, err
+		}
+		creds := awscreds.NewStaticCredentials(credentialsProvider.AccessKeyID, credentialsProvider.SecretAccessKey, credentialsProvider.SessionToken)
+
+		// TODO: Modify this to use SignHTTPRequest() when TCS adds support for AWS SDK v2 Credentials
+		err = utils.SignHTTPRequestV1(request, region, "ecs", creds, reqBody)
 		if err != nil {
 			return nil, err
 		}

@@ -31,6 +31,14 @@ func WithFIPSDetected(val bool) ECSClientOption {
 	}
 }
 
+// WithDualStackEnabled is an ECSClientOption that configures the
+// ecsClient.isDualStackEnabled with the value passed as a parameter.
+func WithDualStackEnabled(val bool) ECSClientOption {
+	return func(client *ecsClient) {
+		client.isDualStackEnabled = val
+	}
+}
+
 // WithDiscoverPollEndpointCacheTTL is an ECSClientOption that configures the
 // ecsClient.pollEndpointCache.ttl with the value passed as a parameter.
 func WithDiscoverPollEndpointCacheTTL(t *async.TTL) ECSClientOption {
@@ -44,6 +52,14 @@ func WithDiscoverPollEndpointCacheTTL(t *async.TTL) ECSClientOption {
 func WithIPv6PortBindingExcluded(val bool) ECSClientOption {
 	return func(client *ecsClient) {
 		client.shouldExcludeIPv6PortBinding = val
+	}
+}
+
+// WithIPv4PortBindingExcluded is an ECSClientOption that configures the
+// ecsClient.shouldExcludeIPv4PortBinding with the value passed as a parameter.
+func WithIPv4PortBindingExcluded(val bool) ECSClientOption {
+	return func(client *ecsClient) {
+		client.shouldExcludeIPv4PortBinding = val
 	}
 }
 
@@ -104,5 +120,14 @@ func WithSubmitStateChangeClient(s ecs.ECSSubmitStateSDK) ECSClientOption {
 func WithMetricsFactory(metricsFactory metrics.EntryFactory) ECSClientOption {
 	return func(client *ecsClient) {
 		client.metricsFactory = metricsFactory
+	}
+}
+
+// WithAvailableMemoryProvider is an ECSClientOption that configures a
+// custom strategy for returning the default amount of available memory
+// on a container instance in MiB.
+func WithAvailableMemoryProvider(availableMemoryProvider func() int32) ECSClientOption {
+	return func(client *ecsClient) {
+		client.availableMemoryProvider = availableMemoryProvider
 	}
 }

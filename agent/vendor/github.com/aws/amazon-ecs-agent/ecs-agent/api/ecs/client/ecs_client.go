@@ -92,11 +92,14 @@ type ecsClient struct {
 	pollEndpointCache                async.TTLCache
 	pollEndpointLock                 sync.Mutex
 	isFIPSDetected                   bool
+	shouldExcludeIPv4PortBinding     bool
 	shouldExcludeIPv6PortBinding     bool
 	sascCustomRetryBackoff           func(func() error) error
 	stscAttachmentCustomRetryBackoff func(func() error) error
 	metricsFactory                   metrics.EntryFactory
 	rciRetryBackoff                  *retry.ExponentialBackoff
+	availableMemoryProvider          func() int32
+	isDualStackEnabled               bool
 }
 
 // NewECSClient creates a new ECSClient interface object.
@@ -119,7 +122,7 @@ func NewECSClient(
 		opt(client)
 	}
 
-	ecsConfig, err := newECSConfig(client.credentialsCache, configAccessor, client.httpClient, client.isFIPSDetected)
+	ecsConfig, err := newECSConfig(client.credentialsCache, configAccessor, client.httpClient, client.isFIPSDetected, client.isDualStackEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +139,9 @@ func NewECSClient(
 	if client.rciRetryBackoff == nil {
 		client.rciRetryBackoff = retry.NewExponentialBackoff(rciMinBackoff, rciMaxBackoff, rciRetryJitter, rciRetryMultiple)
 	}
+	if client.availableMemoryProvider == nil {
+		client.availableMemoryProvider = getHostMemoryInMiB
+	}
 
 	return client, nil
 }
@@ -144,7 +150,7 @@ func newECSConfig(
 	credentialsCache *aws.CredentialsCache,
 	configAccessor config.AgentConfigAccessor,
 	httpClient *http.Client,
-	isFIPSEnabled bool,
+	isFIPSEnabled, isDualStackEnabled bool,
 ) (aws.Config, error) {
 	// We should respect the endpoint given (if any) because it could be the Gamma or Zeta endpoint of ECS service which
 	// don't have the corresponding FIPS endpoints. Otherwise, when the host has FIPS enabled, we should tell SDK to
@@ -152,10 +158,17 @@ func newECSConfig(
 	var endpointFn = func(_ *awsconfig.LoadOptions) error {
 		return nil
 	}
+	fipsEndpointState := aws.FIPSEndpointStateUnset
+	dualStackEndpointState := aws.DualStackEndpointStateUnset
 	if configAccessor.APIEndpoint() != "" {
 		endpointFn = awsconfig.WithBaseEndpoint(utils.AddScheme(configAccessor.APIEndpoint()))
-	} else if isFIPSEnabled {
-		endpointFn = awsconfig.WithUseFIPSEndpoint(aws.FIPSEndpointStateEnabled)
+	} else {
+		if isFIPSEnabled {
+			fipsEndpointState = aws.FIPSEndpointStateEnabled
+		}
+		if isDualStackEnabled {
+			dualStackEndpointState = aws.DualStackEndpointStateEnabled
+		}
 	}
 
 	ecsConfig, err := awsconfig.LoadDefaultConfig(
@@ -164,6 +177,8 @@ func newECSConfig(
 		awsconfig.WithRegion(configAccessor.AWSRegion()),
 		awsconfig.WithCredentialsProvider(credentialsCache),
 		endpointFn,
+		awsconfig.WithUseFIPSEndpoint(fipsEndpointState),
+		awsconfig.WithUseDualStackEndpoint(dualStackEndpointState),
 	)
 	if err != nil {
 		return aws.Config{}, err
@@ -432,7 +447,8 @@ func (client *ecsClient) getResources() ([]types.Resource, error) {
 	integerStr := "INTEGER"
 	stringSetStr := "STRINGSET"
 
-	cpu, mem := getCpuAndMemory()
+	cpu := getCpu()
+	mem := client.availableMemoryProvider()
 	remainingMem := mem - int32(client.configAccessor.ReservedMemory())
 	logger.Info("Remaining memory", logger.Fields{
 		"remainingMemory": remainingMem,
@@ -485,7 +501,12 @@ func (client *ecsClient) GetHostResources() (map[string]types.Resource, error) {
 	return resourceMap, nil
 }
 
-func getCpuAndMemory() (int32, int32) {
+func getCpu() int32 {
+	cpu := utils.GetNumCPU() * 1024
+	return int32(cpu)
+}
+
+func getHostMemoryInMiB() int32 {
 	memInfo, err := meminfo.Read()
 	mem := int32(0)
 	if err == nil {
@@ -496,9 +517,7 @@ func getCpuAndMemory() (int32, int32) {
 		})
 	}
 
-	cpu := utils.GetNumCPU() * 1024
-
-	return int32(cpu), mem
+	return mem
 }
 
 func validateRegisteredAttributes(expectedAttributes, actualAttributes []types.Attribute) error {
@@ -630,7 +649,10 @@ func (client *ecsClient) submitTaskStateChange(change ecs.TaskStateChange) error
 		PullStoppedAt:      change.PullStoppedAt,
 		ExecutionStoppedAt: change.ExecutionStoppedAt,
 		ManagedAgents:      formatManagedAgents(change.ManagedAgents),
-		Containers:         formatContainers(change.Containers, client.shouldExcludeIPv6PortBinding, change.TaskARN),
+		Containers: formatContainers(
+			change.Containers,
+			client.shouldExcludeIPv4PortBinding, client.shouldExcludeIPv6PortBinding,
+			change.TaskARN),
 	}
 
 	_, err := client.submitStateChangeClient.SubmitTaskStateChange(context.TODO(), &req)
@@ -681,6 +703,10 @@ func (client *ecsClient) SubmitContainerStateChange(change ecs.ContainerStateCha
 	}
 
 	networkBindings := change.NetworkBindings
+	if client.shouldExcludeIPv4PortBinding {
+		networkBindings = excludeIPv4PortBindingFromNetworkBindings(networkBindings, change.ContainerName,
+			change.TaskArn)
+	}
 	if client.shouldExcludeIPv6PortBinding {
 		networkBindings = excludeIPv6PortBindingFromNetworkBindings(networkBindings, change.ContainerName,
 			change.TaskArn)
@@ -896,8 +922,9 @@ func formatManagedAgents(managedAgents []types.ManagedAgentStateChange) []types.
 	return result
 }
 
-func formatContainers(containers []types.ContainerStateChange, shouldExcludeIPv6PortBinding bool,
-	taskARN string) []types.ContainerStateChange {
+func formatContainers(containers []types.ContainerStateChange,
+	shouldExcludeIPv4PortBinding, shouldExcludeIPv6PortBinding bool, taskARN string,
+) []types.ContainerStateChange {
 	var result []types.ContainerStateChange
 	for _, c := range containers {
 		if c.RuntimeId != nil {
@@ -909,6 +936,10 @@ func formatContainers(containers []types.ContainerStateChange, shouldExcludeIPv6
 		if c.ImageDigest != nil {
 			c.ImageDigest = trimStringPtr(c.ImageDigest, ecsMaxImageDigestLength)
 		}
+		if shouldExcludeIPv4PortBinding {
+			c.NetworkBindings = excludeIPv4PortBindingFromNetworkBindings(c.NetworkBindings,
+				aws.ToString(c.ContainerName), taskARN)
+		}
 		if shouldExcludeIPv6PortBinding {
 			c.NetworkBindings = excludeIPv6PortBindingFromNetworkBindings(c.NetworkBindings,
 				aws.ToString(c.ContainerName), taskARN)
@@ -918,13 +949,25 @@ func formatContainers(containers []types.ContainerStateChange, shouldExcludeIPv6
 	return result
 }
 
+func excludeIPv4PortBindingFromNetworkBindings(networkBindings []types.NetworkBinding, containerName,
+	taskARN string) []types.NetworkBinding {
+	return excludePortBindingFromNetworkBindings("0.0.0.0", networkBindings, containerName, taskARN)
+}
+
 func excludeIPv6PortBindingFromNetworkBindings(networkBindings []types.NetworkBinding, containerName,
 	taskARN string) []types.NetworkBinding {
+	return excludePortBindingFromNetworkBindings("::", networkBindings, containerName, taskARN)
+}
+
+func excludePortBindingFromNetworkBindings(
+	bindIPToExclude string, networkBindings []types.NetworkBinding, containerName, taskARN string,
+) []types.NetworkBinding {
 	var result []types.NetworkBinding
 	for _, binding := range networkBindings {
-		if aws.ToString(binding.BindIP) == "::" {
-			logger.Debug("Exclude IPv6 port binding", logger.Fields{
+		if aws.ToString(binding.BindIP) == bindIPToExclude {
+			logger.Debug("Exclude port binding", logger.Fields{
 				"portBinding":       binding,
+				"bindIP":            bindIPToExclude,
 				field.ContainerName: containerName,
 				field.TaskARN:       taskARN,
 			})

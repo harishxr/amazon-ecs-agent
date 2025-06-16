@@ -37,7 +37,6 @@ import (
 	mock_asm_factory "github.com/aws/amazon-ecs-agent/agent/asm/factory/mocks"
 	mock_secretsmanageriface "github.com/aws/amazon-ecs-agent/agent/asm/mocks"
 	"github.com/aws/amazon-ecs-agent/agent/config"
-	"github.com/aws/amazon-ecs-agent/agent/config/ipcompatibility"
 	mock_containermetadata "github.com/aws/amazon-ecs-agent/agent/containermetadata/mocks"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient/dockerapi"
@@ -65,13 +64,15 @@ import (
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
 	mock_credentials "github.com/aws/amazon-ecs-agent/ecs-agent/credentials/mocks"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/eventstream"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/netlib/model/appmesh"
 	ni "github.com/aws/amazon-ecs-agent/ecs-agent/netlib/model/networkinterface"
 	mock_ttime "github.com/aws/amazon-ecs-agent/ecs-agent/utils/ttime/mocks"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	cniTypesCurrent "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/docker/docker/api/types"
 	dockercontainer "github.com/docker/docker/api/types/container"
@@ -152,7 +153,7 @@ var (
 )
 
 func init() {
-	defaultConfig = config.DefaultConfig()
+	defaultConfig = config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 	defaultConfig.TaskCPUMemLimit.Value = config.ExplicitlyDisabled
 }
 
@@ -1240,7 +1241,7 @@ func TestStopPauseContainerCleanupDelayAwsvpc(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 
-	cfg := config.DefaultConfig()
+	cfg := config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 	cfg.TaskCPUMemLimit.Value = config.ExplicitlyDisabled
 	cfg.ENIPauseContainerCleanupDelaySeconds = expectedDelaySeconds
 
@@ -2878,12 +2879,14 @@ func TestTaskSecretsEnvironmentVariables(t *testing.T) {
 				},
 			}
 
+			testIPCompatibility := ipcompatibility.NewIPCompatibility(true, true)
 			ssmSecretRes := ssmsecret.NewSSMSecretResource(
 				testTask.Arn,
 				ssmRequirements,
 				credentialsID,
 				credentialsManager,
-				ssmClientCreator)
+				ssmClientCreator,
+				testIPCompatibility)
 
 			// required for validating asm workflows
 			asmClientCreator := mock_asm_factory.NewMockClientCreator(ctrl)
@@ -2906,9 +2909,9 @@ func TestTaskSecretsEnvironmentVariables(t *testing.T) {
 			}
 
 			ssmClientOutput := &ssm.GetParametersOutput{
-				InvalidParameters: []*string{},
-				Parameters: []*ssm.Parameter{
-					&ssm.Parameter{
+				InvalidParameters: []string{},
+				Parameters: []ssmtypes.Parameter{
+					ssmtypes.Parameter{
 						Name:  aws.String(ssmSecretValueFrom),
 						Value: aws.String(ssmSecretRetrievedValue),
 					},
@@ -2919,13 +2922,13 @@ func TestTaskSecretsEnvironmentVariables(t *testing.T) {
 				SecretString: aws.String(asmSecretRetrievedValue),
 			}
 
-			reqSecretNames := []*string{aws.String(ssmSecretValueFrom)}
+			reqSecretNames := []string{ssmSecretValueFrom}
 
 			credentialsManager.EXPECT().GetTaskCredentials(credentialsID).Return(taskIAMcreds, true).Times(2)
-			ssmClientCreator.EXPECT().NewSSMClient(region, executionRoleCredentials).Return(mockSSMClient)
+			ssmClientCreator.EXPECT().NewSSMClient(region, executionRoleCredentials, testIPCompatibility).Return(mockSSMClient, nil)
 			asmClientCreator.EXPECT().NewASMClient(region, executionRoleCredentials).Return(mockASMClient, nil)
 
-			mockSSMClient.EXPECT().GetParameters(gomock.Any()).Do(func(in *ssm.GetParametersInput) {
+			mockSSMClient.EXPECT().GetParameters(gomock.Any(), gomock.Any()).Do(func(ctx context.Context, in *ssm.GetParametersInput, optFns ...func(*ssm.Options)) {
 				assert.Equal(t, in.Names, reqSecretNames)
 			}).Return(ssmClientOutput, nil).Times(1)
 
@@ -3072,7 +3075,7 @@ func TestCreateContainerAwslogsLogDriver(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.TODO())
 			defer cancel()
-			cfg := config.DefaultConfig()
+			cfg := config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 			cfg.InstanceIPCompatibility = tc.instanceIPCompatibility
 			ctrl, client, _, taskEngine, _, _, _, _ := mocks(t, ctx, &cfg)
 			defer ctrl.Finish()
@@ -4673,7 +4676,7 @@ func TestManifestPullTaskShouldContinue(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			// Set up config
-			cfg := config.DefaultConfig()
+			cfg := config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 			cfg.TaskCPUMemLimit.Value = config.ExplicitlyDisabled
 			cfg.ImagePullBehavior = tc.imagePullBehavior
 
@@ -4899,7 +4902,7 @@ func TestManifestPullFailuresTaskShouldStop(t *testing.T) {
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			// Set up config
-			cfg := config.DefaultConfig()
+			cfg := config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 			cfg.TaskCPUMemLimit.Value = config.ExplicitlyDisabled
 			cfg.ImagePullBehavior = tc.imagePullBehavior
 
@@ -5499,7 +5502,7 @@ func TestSetAWSLogsDualStackEndpoint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set up config and task engine
-			cfg := config.DefaultConfig()
+			cfg := config.DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 			cfg.InstanceIPCompatibility = ipcompatibility.NewIPv6OnlyCompatibility()
 			ctrl, client, _, taskEngine, _, _, _, _ := mocks(t, context.TODO(), &cfg)
 			defer ctrl.Finish()

@@ -21,11 +21,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/aws/amazon-ecs-agent/agent/config/ipcompatibility"
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient"
 	"github.com/aws/amazon-ecs-agent/agent/utils"
 	netutils "github.com/aws/amazon-ecs-agent/agent/utils/net"
 	"github.com/aws/amazon-ecs-agent/agent/utils/netlinkwrapper"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 
 	"github.com/aws/amazon-ecs-agent/ecs-agent/ec2"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/logger"
@@ -80,7 +80,12 @@ var (
 )
 
 // DefaultConfig returns the default configuration for Linux
-func DefaultConfig() Config {
+func DefaultConfig(instanceIPCompatibility ipcompatibility.IPCompatibility) Config {
+	shouldExcludeIPv6PortBinding := BooleanDefaultTrue{Value: ExplicitlyEnabled}
+	if instanceIPCompatibility.IsIPv6Only() {
+		// If the instance is IPv6-only then IPv6 port bindings should be included by default
+		shouldExcludeIPv6PortBinding = BooleanDefaultTrue{Value: ExplicitlyDisabled}
+	}
 	return Config{
 		DockerEndpoint:                      "unix:///var/run/docker.sock",
 		ReservedPorts:                       []uint16{SSHPort, DockerReservedPort, DockerReservedSSLPort, AgentIntrospectionPort, tmds.Port},
@@ -128,7 +133,7 @@ func DefaultConfig() Config {
 		FSxWindowsFileServerCapable:         BooleanDefaultTrue{Value: ExplicitlyDisabled},
 		RuntimeStatsLogFile:                 defaultRuntimeStatsLogFile,
 		EnableRuntimeStats:                  BooleanDefaultFalse{Value: NotSet},
-		ShouldExcludeIPv6PortBinding:        BooleanDefaultTrue{Value: ExplicitlyEnabled},
+		ShouldExcludeIPv6PortBinding:        shouldExcludeIPv6PortBinding,
 		CSIDriverSocketPath:                 defaultCSIDriverSocketPath,
 		NodeStageTimeout:                    nodeStageTimeout,
 		NodeUnstageTimeout:                  nodeUnstageTimeout,

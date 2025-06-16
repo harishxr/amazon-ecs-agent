@@ -31,6 +31,7 @@ import (
 	apicontainerstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/container/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/api/task/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 )
 
 const (
@@ -65,6 +66,7 @@ type SSMSecretResource struct {
 	// ssmClientCreator is a factory interface that creates new SSM clients. This is
 	// needed mostly for testing.
 	ssmClientCreator factory.SSMClientCreator
+	ipCompatibility  ipcompatibility.IPCompatibility
 
 	// terminalReason should be set for resource creation failures. This ensures
 	// the resource object carries some context for why provisioning failed.
@@ -80,7 +82,8 @@ func NewSSMSecretResource(taskARN string,
 	ssmSecrets map[string][]apicontainer.Secret,
 	executionCredentialsID string,
 	credentialsManager credentials.Manager,
-	ssmClientCreator factory.SSMClientCreator) *SSMSecretResource {
+	ssmClientCreator factory.SSMClientCreator,
+	ipCompatibility ipcompatibility.IPCompatibility) *SSMSecretResource {
 
 	s := &SSMSecretResource{
 		taskARN:                taskARN,
@@ -88,6 +91,7 @@ func NewSSMSecretResource(taskARN string,
 		credentialsManager:     credentialsManager,
 		executionCredentialsID: executionCredentialsID,
 		ssmClientCreator:       ssmClientCreator,
+		ipCompatibility:        ipCompatibility,
 	}
 
 	s.initStatusToTransition()
@@ -335,7 +339,11 @@ func (secret *SSMSecretResource) retrieveSSMSecretValuesByRegion(region string, 
 func (secret *SSMSecretResource) retrieveSSMSecretValues(region string, names []string, iamCredentials credentials.IAMRoleCredentials, wg *sync.WaitGroup, errorEvents chan error) {
 	defer wg.Done()
 
-	ssmClient := secret.ssmClientCreator.NewSSMClient(region, iamCredentials)
+	ssmClient, err := secret.ssmClientCreator.NewSSMClient(region, iamCredentials, secret.ipCompatibility)
+	if err != nil {
+		errorEvents <- fmt.Errorf("unable to create SSM client in %s: %v", region, err)
+		return
+	}
 	seelog.Debugf("ssm secret resource: retrieving resource for secrets %v in region [%s] in task: [%s]", names, region, secret.taskARN)
 	secValueMap, err := ssm.GetSecretsFromSSM(names, ssmClient)
 	if err != nil {
@@ -415,6 +423,7 @@ func (secret *SSMSecretResource) Initialize(
 	secret.initStatusToTransition()
 	secret.credentialsManager = resourceFields.CredentialsManager
 	secret.ssmClientCreator = resourceFields.SSMClientCreator
+	secret.ipCompatibility = config.InstanceIPCompatibility
 
 	// if task hasn't turn to 'created' status, and it's desire status is 'running'
 	// the resource status needs to be reset to 'NONE' status so the secret value

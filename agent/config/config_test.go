@@ -28,6 +28,7 @@ import (
 	"github.com/aws/amazon-ecs-agent/agent/utils"
 	ec2testutil "github.com/aws/amazon-ecs-agent/agent/utils/test/ec2util"
 	mock_ec2 "github.com/aws/amazon-ecs-agent/ecs-agent/ec2/mocks"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 
 	"github.com/golang/mock/gomock"
@@ -288,14 +289,14 @@ func TestBadTagsSerialization(t *testing.T) {
 }
 
 func TestInvalidLoggingDriver(t *testing.T) {
-	conf := DefaultConfig()
+	conf := DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 	conf.AWSRegion = "us-west-2"
 	conf.AvailableLoggingDrivers = []dockerclient.LoggingDriver{"invalid-logging-driver"}
 	assert.Error(t, conf.validateAndOverrideBounds(), "Should be error with invalid-logging-driver")
 }
 
 func TestAwsFirelensLoggingDriver(t *testing.T) {
-	conf := DefaultConfig()
+	conf := DefaultConfig(ipcompatibility.NewIPv4OnlyCompatibility())
 	conf.AWSRegion = "us-west-2"
 	conf.AvailableLoggingDrivers = []dockerclient.LoggingDriver{"awsfirelens"}
 	assert.NoError(t, conf.validateAndOverrideBounds(), "awsfirelens is a valid logging driver, no error was expected")

@@ -17,6 +17,7 @@
 package ssmsecret
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"testing"
@@ -31,8 +32,11 @@ import (
 	apitaskstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/task/status"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
 	mock_credentials "github.com/aws/amazon-ecs-agent/ecs-agent/credentials/mocks"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/ipcompatibility"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +57,8 @@ const (
 	secretValue            = "secret-value"
 	taskARN                = "task1"
 )
+
+var testIPCompatibility = ipcompatibility.NewIPCompatibility(true, true)
 
 func TestCreateAndGetWithOneCall(t *testing.T) {
 	requiredSecretData := make(map[string][]apicontainer.Secret)
@@ -86,24 +92,24 @@ func TestCreateAndGetWithOneCall(t *testing.T) {
 	}
 
 	ssmOutput := &ssm.GetParametersOutput{
-		InvalidParameters: []*string{},
-		Parameters: []*ssm.Parameter{
-			&ssm.Parameter{
+		InvalidParameters: []string{},
+		Parameters: []ssmtypes.Parameter{
+			ssmtypes.Parameter{
 				Name:  aws.String(valueFrom1),
 				Value: aws.String(secretValue),
 			},
-			&ssm.Parameter{
+			ssmtypes.Parameter{
 				Name:  aws.String(valueFrom2),
 				Value: aws.String(secretValue),
 			},
 		},
 	}
 
-	allNames := []*string{aws.String(valueFrom1), aws.String(valueFrom2)}
+	allNames := []string{valueFrom1, valueFrom2}
 
 	credentialsManager.EXPECT().GetTaskCredentials(executionCredentialsID).Return(creds, true)
-	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds).Return(mockSSMClient)
-	mockSSMClient.EXPECT().GetParameters(gomock.Any()).Do(func(in *ssm.GetParametersInput) {
+	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds, testIPCompatibility).Return(mockSSMClient, nil)
+	mockSSMClient.EXPECT().GetParameters(gomock.Any(), gomock.Any()).Do(func(ctx context.Context, in *ssm.GetParametersInput, optFns ...func(*ssm.Options)) {
 		assert.Equal(t, in.Names, allNames)
 	}).Return(ssmOutput, nil).Times(1)
 
@@ -112,6 +118,7 @@ func TestCreateAndGetWithOneCall(t *testing.T) {
 		requiredSecrets:        requiredSecretData,
 		credentialsManager:     credentialsManager,
 		ssmClientCreator:       ssmClientCreator,
+		ipCompatibility:        testIPCompatibility,
 	}
 	require.NoError(t, ssmRes.Create())
 
@@ -158,21 +165,21 @@ func TestCreateAndGetWithTwoCallsAcrossRegions(t *testing.T) {
 	}
 
 	ssmOutput := &ssm.GetParametersOutput{
-		InvalidParameters: []*string{},
-		Parameters: []*ssm.Parameter{
-			&ssm.Parameter{
+		InvalidParameters: []string{},
+		Parameters: []ssmtypes.Parameter{
+			ssmtypes.Parameter{
 				Name:  aws.String(valueFrom1),
 				Value: aws.String(secretValue),
 			},
 		},
 	}
 
-	allNames := []*string{aws.String(valueFrom1)}
+	allNames := []string{valueFrom1}
 
 	credentialsManager.EXPECT().GetTaskCredentials(executionCredentialsID).Return(creds, true)
-	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds).Return(mockSSMClient)
-	ssmClientCreator.EXPECT().NewSSMClient(region2, iamRoleCreds).Return(mockSSMClient)
-	mockSSMClient.EXPECT().GetParameters(gomock.Any()).Do(func(in *ssm.GetParametersInput) {
+	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds, testIPCompatibility).Return(mockSSMClient, nil)
+	ssmClientCreator.EXPECT().NewSSMClient(region2, iamRoleCreds, testIPCompatibility).Return(mockSSMClient, nil)
+	mockSSMClient.EXPECT().GetParameters(gomock.Any(), gomock.Any()).Do(func(ctx context.Context, in *ssm.GetParametersInput, optFns ...func(*ssm.Options)) {
 		assert.Equal(t, in.Names, allNames)
 	}).Return(ssmOutput, nil).Times(2)
 
@@ -181,6 +188,7 @@ func TestCreateAndGetWithTwoCallsAcrossRegions(t *testing.T) {
 		requiredSecrets:        requiredSecretData,
 		credentialsManager:     credentialsManager,
 		ssmClientCreator:       ssmClientCreator,
+		ipCompatibility:        testIPCompatibility,
 	}
 	require.NoError(t, ssmRes.Create())
 
@@ -221,23 +229,23 @@ func TestCreateAndGetWithTwoCallsInSameRegion(t *testing.T) {
 		IAMRoleCredentials: iamRoleCreds,
 	}
 
-	var params1, params2 []*ssm.Parameter
-	var paramsInput1, paramsInput2 []*string
+	var params1, params2 []ssmtypes.Parameter
+	var paramsInput1, paramsInput2 []string
 	var paramsValue1, paramsValue2 []string
 
 	for i := 1; i <= 10; i++ {
 		num := strconv.Itoa(i)
-		param := &ssm.Parameter{
+		param := ssmtypes.Parameter{
 			Name:  aws.String("secret-name-" + num),
 			Value: aws.String("secret-value-" + num),
 		}
 		params1 = append(params1, param)
-		paramsInput1 = append(paramsInput1, aws.String("secret-name-"+num))
+		paramsInput1 = append(paramsInput1, "secret-name-"+num)
 		paramsValue1 = append(paramsValue1, "secret-value-"+num)
 	}
 
 	ssmOutput1 := &ssm.GetParametersOutput{
-		InvalidParameters: []*string{},
+		InvalidParameters: []string{},
 		Parameters:        params1,
 	}
 
@@ -248,16 +256,16 @@ func TestCreateAndGetWithTwoCallsInSameRegion(t *testing.T) {
 
 	for i := 11; i <= 12; i++ {
 		num := strconv.Itoa(i)
-		param := &ssm.Parameter{
+		param := ssmtypes.Parameter{
 			Name:  aws.String("secret-name-" + num),
 			Value: aws.String("secret-value-" + num),
 		}
 		params2 = append(params2, param)
-		paramsInput2 = append(paramsInput2, aws.String("secret-name-"+num))
+		paramsInput2 = append(paramsInput2, "secret-name-"+num)
 		paramsValue2 = append(paramsValue2, "secret-value-"+num)
 	}
 	ssmOutput2 := &ssm.GetParametersOutput{
-		InvalidParameters: []*string{},
+		InvalidParameters: []string{},
 		Parameters:        params2,
 	}
 
@@ -267,15 +275,16 @@ func TestCreateAndGetWithTwoCallsInSameRegion(t *testing.T) {
 	}
 
 	credentialsManager.EXPECT().GetTaskCredentials(executionCredentialsID).Return(creds, true)
-	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds).Return(mockSSMClient).Times(2)
-	mockSSMClient.EXPECT().GetParameters(ssmInput1).Return(ssmOutput1, nil)
-	mockSSMClient.EXPECT().GetParameters(ssmInput2).Return(ssmOutput2, nil)
+	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds, testIPCompatibility).Return(mockSSMClient, nil).Times(2)
+	mockSSMClient.EXPECT().GetParameters(gomock.Any(), ssmInput1).Return(ssmOutput1, nil)
+	mockSSMClient.EXPECT().GetParameters(gomock.Any(), ssmInput2).Return(ssmOutput2, nil)
 
 	ssmRes := &SSMSecretResource{
 		executionCredentialsID: executionCredentialsID,
 		requiredSecrets:        requiredSecretData,
 		credentialsManager:     credentialsManager,
 		ssmClientCreator:       ssmClientCreator,
+		ipCompatibility:        testIPCompatibility,
 	}
 	require.NoError(t, ssmRes.Create())
 
@@ -321,16 +330,16 @@ func TestCreateReturnMultipleErrors(t *testing.T) {
 	}
 
 	ssmOutput := &ssm.GetParametersOutput{
-		InvalidParameters: []*string{aws.String(valueFrom1)},
-		Parameters:        []*ssm.Parameter{},
+		InvalidParameters: []string{valueFrom1},
+		Parameters:        []ssmtypes.Parameter{},
 	}
 
-	allNames := []*string{aws.String(valueFrom1)}
+	allNames := []string{valueFrom1}
 
 	credentialsManager.EXPECT().GetTaskCredentials(executionCredentialsID).Return(creds, true)
-	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds).Return(mockSSMClient)
-	ssmClientCreator.EXPECT().NewSSMClient(region2, iamRoleCreds).Return(mockSSMClient)
-	mockSSMClient.EXPECT().GetParameters(gomock.Any()).Do(func(in *ssm.GetParametersInput) {
+	ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds, testIPCompatibility).Return(mockSSMClient, nil)
+	ssmClientCreator.EXPECT().NewSSMClient(region2, iamRoleCreds, testIPCompatibility).Return(mockSSMClient, nil)
+	mockSSMClient.EXPECT().GetParameters(gomock.Any(), gomock.Any()).Do(func(ctx context.Context, in *ssm.GetParametersInput, optFns ...func(*ssm.Options)) {
 		assert.Equal(t, in.Names, allNames)
 	}).Return(ssmOutput, nil).Times(2)
 
@@ -339,6 +348,7 @@ func TestCreateReturnMultipleErrors(t *testing.T) {
 		requiredSecrets:        requiredSecretData,
 		credentialsManager:     credentialsManager,
 		ssmClientCreator:       ssmClientCreator,
+		ipCompatibility:        testIPCompatibility,
 	}
 
 	assert.Error(t, ssmRes.Create())
@@ -371,15 +381,15 @@ func TestCreateReturnError(t *testing.T) {
 	}
 
 	ssmOutput := &ssm.GetParametersOutput{
-		InvalidParameters: []*string{aws.String(valueFrom1)},
-		Parameters:        []*ssm.Parameter{},
+		InvalidParameters: []string{valueFrom1},
+		Parameters:        []ssmtypes.Parameter{},
 	}
 
-	allNames := []*string{aws.String(valueFrom1)}
+	allNames := []string{valueFrom1}
 	gomock.InOrder(
 		credentialsManager.EXPECT().GetTaskCredentials(executionCredentialsID).Return(creds, true),
-		ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds).Return(mockSSMClient),
-		mockSSMClient.EXPECT().GetParameters(gomock.Any()).Do(func(in *ssm.GetParametersInput) {
+		ssmClientCreator.EXPECT().NewSSMClient(region1, iamRoleCreds, testIPCompatibility).Return(mockSSMClient, nil),
+		mockSSMClient.EXPECT().GetParameters(gomock.Any(), gomock.Any()).Do(func(ctx context.Context, in *ssm.GetParametersInput, optFns ...func(*ssm.Options)) {
 			assert.Equal(t, in.Names, allNames)
 		}).Return(ssmOutput, nil),
 	)
@@ -388,6 +398,7 @@ func TestCreateReturnError(t *testing.T) {
 		requiredSecrets:        requiredSecretData,
 		credentialsManager:     credentialsManager,
 		ssmClientCreator:       ssmClientCreator,
+		ipCompatibility:        testIPCompatibility,
 	}
 
 	assert.Error(t, ssmRes.Create())
@@ -498,7 +509,7 @@ func TestInitialize(t *testing.T) {
 		desiredStatusUnsafe: resourcestatus.ResourceCreated,
 	}
 	ssmRes.Initialize(
-		&config.Config{},
+		&config.Config{InstanceIPCompatibility: testIPCompatibility},
 		&taskresource.ResourceFields{
 			ResourceFieldsCommon: &taskresource.ResourceFieldsCommon{
 				SSMClientCreator:   ssmClientCreator,
@@ -507,6 +518,7 @@ func TestInitialize(t *testing.T) {
 		}, apitaskstatus.TaskStatusNone, apitaskstatus.TaskRunning)
 	assert.Equal(t, resourcestatus.ResourceStatusNone, ssmRes.GetKnownStatus())
 	assert.Equal(t, resourcestatus.ResourceCreated, ssmRes.GetDesiredStatus())
+	assert.Equal(t, testIPCompatibility, ssmRes.ipCompatibility)
 
 }
 

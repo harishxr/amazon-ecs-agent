@@ -33,10 +33,11 @@ import (
 	"github.com/aws/amazon-ecs-agent/ecs-agent/doctor"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/metrics"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/tcs/model/ecstcs"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/utils"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/wsclient"
 	mock_wsconn "github.com/aws/amazon-ecs-agent/ecs-agent/wsclient/wsconn/mock"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 )
@@ -48,7 +49,7 @@ const (
 	testContainerInstance                                     = "containerInstance"
 	rwTimeout                                                 = time.Second
 	testPublishMetricRequestSizeLimitSC                       = 1024
-	testPublishMetricRequestSizeLimitNonSC                    = 220
+	testPublishMetricRequestSizeLimitNonSC                    = 230
 	testPublishMetricRequestSizeLimitNonSCWithInstanceMetrics = 300
 	testTelemetryChannelDefaultBufferSize                     = 10
 	testIncludeScStats                                        = true
@@ -99,7 +100,7 @@ func (fc *falseHealthcheck) GetLastHealthcheckTime() time.Time {
 	return time.Date(1974, time.May, 19, 1, 2, 3, 4, time.UTC)
 }
 
-var testCreds = credentials.NewStaticCredentials("test-id", "test-secret", "test-token")
+var testCreds = credentials.NewStaticCredentialsProvider("test-id", "test-secret", "test-token")
 
 var emptyDoctor, _ = doctor.NewDoctor([]doctor.Healthcheck{}, "test-cluster", "this:is:an:instance:arn")
 
@@ -647,7 +648,7 @@ func testCS(conn *mock_wsconn.MockWebsocketConn, metricsMessages <-chan ecstcs.T
 		AcceptInsecureCert: true,
 	}
 	cs := New("https://aws.amazon.com/ecs", cfg, emptyDoctor, false, testPublishMetricsInterval,
-		testCreds, rwTimeout, metricsMessages, healthMessages, metrics.NewNopEntryFactory()).(*tcsClientServer)
+		aws.NewCredentialsCache(testCreds), rwTimeout, metricsMessages, healthMessages, metrics.NewNopEntryFactory()).(*tcsClientServer)
 	cs.SetConnection(conn)
 	return cs
 }
@@ -718,7 +719,7 @@ func TestHealthToPublishHealthRequests(t *testing.T) {
 		IsDocker:           true,
 	}
 
-	cs := New("", cfg, emptyDoctor, true, testPublishMetricsInterval, testCreds, rwTimeout, nil, nil, metrics.NewNopEntryFactory())
+	cs := New("", cfg, emptyDoctor, true, testPublishMetricsInterval, aws.NewCredentialsCache(testCreds), rwTimeout, nil, nil, metrics.NewNopEntryFactory())
 	cs.SetConnection(conn)
 
 	testMetadata := &ecstcs.HealthMetadata{
@@ -734,7 +735,7 @@ func TestHealthToPublishHealthRequests(t *testing.T) {
 				{
 					ContainerName: aws.String("container1"),
 					HealthStatus:  aws.String("HEALTHY"),
-					StatusSince:   aws.Time(time.Now()),
+					StatusSince:   (*utils.Timestamp)(aws.Time(time.Now())),
 				},
 			},
 			TaskArn:               aws.String("t1"),
@@ -746,7 +747,7 @@ func TestHealthToPublishHealthRequests(t *testing.T) {
 				{
 					ContainerName: aws.String("container2"),
 					HealthStatus:  aws.String("HEALTHY"),
-					StatusSince:   aws.Time(time.Now()),
+					StatusSince:   (*utils.Timestamp)(aws.Time(time.Now())),
 				},
 			},
 			TaskArn:               aws.String("t2"),
@@ -801,14 +802,14 @@ func TestGetInstanceStatuses(t *testing.T) {
 	trueCheck := &trueHealthcheck{}
 	falseCheck := &falseHealthcheck{}
 	trueStatus := &ecstcs.InstanceStatus{
-		LastStatusChange: aws.Time(trueCheck.GetStatusChangeTime()),
-		LastUpdated:      aws.Time(trueCheck.GetLastHealthcheckTime()),
+		LastStatusChange: (*utils.Timestamp)(aws.Time(trueCheck.GetStatusChangeTime())),
+		LastUpdated:      (*utils.Timestamp)(aws.Time(trueCheck.GetLastHealthcheckTime())),
 		Status:           aws.String(trueCheck.GetHealthcheckStatus().String()),
 		Type:             aws.String(trueCheck.GetHealthcheckType()),
 	}
 	falseStatus := &ecstcs.InstanceStatus{
-		LastStatusChange: aws.Time(falseCheck.GetStatusChangeTime()),
-		LastUpdated:      aws.Time(falseCheck.GetLastHealthcheckTime()),
+		LastStatusChange: (*utils.Timestamp)(aws.Time(falseCheck.GetStatusChangeTime())),
+		LastUpdated:      (*utils.Timestamp)(aws.Time(falseCheck.GetLastHealthcheckTime())),
 		Status:           aws.String(falseCheck.GetHealthcheckStatus().String()),
 		Type:             aws.String(falseCheck.GetHealthcheckType()),
 	}
@@ -858,14 +859,14 @@ func TestGetPublishInstanceStatusRequest(t *testing.T) {
 	trueCheck := &trueHealthcheck{}
 	falseCheck := &falseHealthcheck{}
 	trueStatus := &ecstcs.InstanceStatus{
-		LastStatusChange: aws.Time(trueCheck.GetStatusChangeTime()),
-		LastUpdated:      aws.Time(trueCheck.GetLastHealthcheckTime()),
+		LastStatusChange: (*utils.Timestamp)(aws.Time(trueCheck.GetStatusChangeTime())),
+		LastUpdated:      (*utils.Timestamp)(aws.Time(trueCheck.GetLastHealthcheckTime())),
 		Status:           aws.String(trueCheck.GetHealthcheckStatus().String()),
 		Type:             aws.String(trueCheck.GetHealthcheckType()),
 	}
 	falseStatus := &ecstcs.InstanceStatus{
-		LastStatusChange: aws.Time(falseCheck.GetStatusChangeTime()),
-		LastUpdated:      aws.Time(falseCheck.GetLastHealthcheckTime()),
+		LastStatusChange: (*utils.Timestamp)(aws.Time(falseCheck.GetStatusChangeTime())),
+		LastUpdated:      (*utils.Timestamp)(aws.Time(falseCheck.GetLastHealthcheckTime())),
 		Status:           aws.String(falseCheck.GetHealthcheckStatus().String()),
 		Type:             aws.String(falseCheck.GetHealthcheckType()),
 	}

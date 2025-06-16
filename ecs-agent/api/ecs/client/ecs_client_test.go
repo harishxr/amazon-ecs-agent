@@ -783,7 +783,7 @@ func TestRegisterContainerInstanceWithNegativeResource(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	_, mem := getCpuAndMemory()
+	mem := getHostMemoryInMiB()
 	mockEC2Metadata := mock_ec2.NewMockEC2MetadataClient(ctrl)
 	cfgAccessorOverrideFunc := func(cfgAccessor *mock_config.MockAgentConfigAccessor) {
 		cfgAccessor.EXPECT().ReservedMemory().Return(uint16(mem) + 1).AnyTimes()
@@ -1612,6 +1612,74 @@ func TestFIPSEndpointStateOnFIPSDisabledHosts(t *testing.T) {
 		client.(*ecsClient).standardClient.(*ecsservice.Client).Options().EndpointOptions.UseFIPSEndpoint)
 }
 
+func TestDualStackEndpointStateWhenEndpointGiven(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	// Endpoint is given during the call to newMockConfigAccessor function.
+	cfgAccessor := newMockConfigAccessor(ctrl, nil)
+	assert.NotEmpty(t, cfgAccessor.APIEndpoint())
+
+	client, err := NewECSClient(aws.NewCredentialsCache(aws.AnonymousCredentials{}), cfgAccessor, ec2.NewBlackholeEC2MetadataClient(),
+		agentVer)
+	assert.NoError(t, err)
+	assert.Equal(t, aws.DualStackEndpointStateUnset,
+		client.(*ecsClient).standardClient.(*ecsservice.Client).Options().EndpointOptions.UseDualStackEndpoint)
+}
+
+func TestDualStackEndpointStateEnabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cfgAccessorOverrideFunc := func(cfgAccessor *mock_config.MockAgentConfigAccessor) {
+		cfgAccessor.EXPECT().APIEndpoint().Return("").AnyTimes()
+	}
+	cfgAccessor := newMockConfigAccessor(ctrl, cfgAccessorOverrideFunc)
+	assert.Empty(t, cfgAccessor.APIEndpoint())
+
+	client, err := NewECSClient(aws.NewCredentialsCache(aws.AnonymousCredentials{}), cfgAccessor, ec2.NewBlackholeEC2MetadataClient(),
+		agentVer, WithDualStackEnabled(true))
+	assert.NoError(t, err)
+	assert.Equal(t, aws.DualStackEndpointStateEnabled,
+		client.(*ecsClient).standardClient.(*ecsservice.Client).Options().EndpointOptions.UseDualStackEndpoint)
+}
+
+func TestDualStackEndpointStateDisabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cfgAccessorOverrideFunc := func(cfgAccessor *mock_config.MockAgentConfigAccessor) {
+		cfgAccessor.EXPECT().APIEndpoint().Return("").AnyTimes()
+	}
+	cfgAccessor := newMockConfigAccessor(ctrl, cfgAccessorOverrideFunc)
+	assert.Empty(t, cfgAccessor.APIEndpoint())
+
+	client, err := NewECSClient(aws.NewCredentialsCache(aws.AnonymousCredentials{}), cfgAccessor, ec2.NewBlackholeEC2MetadataClient(),
+		agentVer)
+	assert.NoError(t, err)
+	assert.Equal(t, aws.DualStackEndpointStateUnset,
+		client.(*ecsClient).standardClient.(*ecsservice.Client).Options().EndpointOptions.UseDualStackEndpoint)
+}
+
+func TestDualStackAndFIPSEndpointStatesEnabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cfgAccessorOverrideFunc := func(cfgAccessor *mock_config.MockAgentConfigAccessor) {
+		cfgAccessor.EXPECT().APIEndpoint().Return("").AnyTimes()
+	}
+	cfgAccessor := newMockConfigAccessor(ctrl, cfgAccessorOverrideFunc)
+	assert.Empty(t, cfgAccessor.APIEndpoint())
+
+	client, err := NewECSClient(aws.NewCredentialsCache(aws.AnonymousCredentials{}), cfgAccessor, ec2.NewBlackholeEC2MetadataClient(),
+		agentVer, WithFIPSDetected(true), WithDualStackEnabled(true))
+	assert.NoError(t, err)
+	assert.Equal(t, aws.FIPSEndpointStateEnabled,
+		client.(*ecsClient).standardClient.(*ecsservice.Client).Options().EndpointOptions.UseFIPSEndpoint)
+	assert.Equal(t, aws.DualStackEndpointStateEnabled,
+		client.(*ecsClient).standardClient.(*ecsservice.Client).Options().EndpointOptions.UseDualStackEndpoint)
+}
+
 func TestDiscoverPollEndpointCacheTTLSet(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -1658,6 +1726,156 @@ func TestDiscoverPollEndpointCacheTTLNotSet(t *testing.T) {
 	assert.True(t, found)
 	assert.False(t, expired)
 	assert.Equal(t, endpoint, aws.ToString(cachedEndpoint.(*ecsservice.DiscoverPollEndpointOutput).Endpoint))
+}
+
+func TestPortBindingExclusions(t *testing.T) {
+	ipv4PortBinding := types.NetworkBinding{
+		BindIP:        aws.String("0.0.0.0"),
+		ContainerPort: aws.Int32(1),
+		HostPort:      aws.Int32(2),
+		Protocol:      "tcp",
+	}
+	ipv6PortBinding := types.NetworkBinding{
+		BindIP:        aws.String("::"),
+		ContainerPort: aws.Int32(3),
+		HostPort:      aws.Int32(4),
+		Protocol:      "tcp",
+	}
+
+	testcases := []struct {
+		name                    string
+		clientOpts              []ECSClientOption
+		expectedNetworkBindings []types.NetworkBinding
+	}{
+		{
+			name:                    "exclude ipv4 true",
+			clientOpts:              []ECSClientOption{WithIPv4PortBindingExcluded(true)},
+			expectedNetworkBindings: []types.NetworkBinding{ipv6PortBinding},
+		},
+		{
+			name:                    "exclude ipv4 false",
+			clientOpts:              []ECSClientOption{WithIPv4PortBindingExcluded(false)},
+			expectedNetworkBindings: []types.NetworkBinding{ipv4PortBinding, ipv6PortBinding},
+		},
+		{
+			name:                    "exclude ipv6 true",
+			clientOpts:              []ECSClientOption{WithIPv6PortBindingExcluded(true)},
+			expectedNetworkBindings: []types.NetworkBinding{ipv4PortBinding},
+		},
+		{
+			name:                    "exclude ipv6 false",
+			clientOpts:              []ECSClientOption{WithIPv6PortBindingExcluded(false)},
+			expectedNetworkBindings: []types.NetworkBinding{ipv4PortBinding, ipv6PortBinding},
+		},
+		{
+			name: "exclude ipv4 and ipv6",
+			clientOpts: []ECSClientOption{
+				WithIPv4PortBindingExcluded(true),
+				WithIPv6PortBindingExcluded(true),
+			},
+			expectedNetworkBindings: nil,
+		},
+		{
+			name:                    "no options set",
+			clientOpts:              []ECSClientOption{},
+			expectedNetworkBindings: []types.NetworkBinding{ipv4PortBinding, ipv6PortBinding},
+		},
+		{
+			name: "false - false",
+			clientOpts: []ECSClientOption{
+				WithIPv4PortBindingExcluded(false),
+				WithIPv6PortBindingExcluded(false),
+			},
+			expectedNetworkBindings: []types.NetworkBinding{ipv4PortBinding, ipv6PortBinding},
+		},
+		{
+			name: "false - true",
+			clientOpts: []ECSClientOption{
+				WithIPv4PortBindingExcluded(false),
+				WithIPv6PortBindingExcluded(true),
+			},
+			expectedNetworkBindings: []types.NetworkBinding{ipv4PortBinding},
+		},
+		{
+			name: "true - false",
+			clientOpts: []ECSClientOption{
+				WithIPv4PortBindingExcluded(true),
+				WithIPv6PortBindingExcluded(false),
+			},
+			expectedNetworkBindings: []types.NetworkBinding{ipv6PortBinding},
+		},
+		{
+			name: "true - true",
+			clientOpts: []ECSClientOption{
+				WithIPv4PortBindingExcluded(true),
+				WithIPv6PortBindingExcluded(true),
+			},
+			expectedNetworkBindings: nil,
+		},
+	}
+
+	for _, tt := range testcases {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			tester := setup(t, ctrl, ec2.NewBlackholeEC2MetadataClient(), nil, tt.clientOpts...)
+
+			// Test SubmitContainerStateChange
+			tester.mockSubmitStateClient.EXPECT().SubmitContainerStateChange(gomock.Any(),
+				&ecsservice.SubmitContainerStateChangeInput{
+					Cluster:         aws.String(configuredCluster),
+					Task:            aws.String(taskARN),
+					ContainerName:   aws.String(containerName),
+					RuntimeId:       aws.String(runtimeID),
+					Status:          aws.String("RUNNING"),
+					NetworkBindings: tt.expectedNetworkBindings,
+				})
+			err := tester.client.SubmitContainerStateChange(ecs.ContainerStateChange{
+				TaskArn:       taskARN,
+				ContainerName: containerName,
+				RuntimeID:     runtimeID,
+				Status:        apicontainerstatus.ContainerRunning,
+				NetworkBindings: []types.NetworkBinding{
+					ipv4PortBinding,
+					ipv6PortBinding,
+				},
+			})
+			assert.NoError(t, err, "Unable to submit container state change")
+
+			// Test SubmitTaskStateChange
+			tester.mockSubmitStateClient.EXPECT().SubmitTaskStateChange(gomock.Any(),
+				&ecsservice.SubmitTaskStateChangeInput{
+					Cluster: aws.String(configuredCluster),
+					Task:    aws.String(taskARN),
+					Status:  aws.String("RUNNING"),
+					Reason:  aws.String(""),
+					Containers: []types.ContainerStateChange{
+						{
+							ContainerName:   aws.String(containerName),
+							RuntimeId:       aws.String(runtimeID),
+							Status:          aws.String("RUNNING"),
+							NetworkBindings: tt.expectedNetworkBindings,
+						},
+					}})
+			err = tester.client.SubmitTaskStateChange(ecs.TaskStateChange{
+				ClusterARN: configuredCluster,
+				TaskARN:    taskARN,
+				Status:     apitaskstatus.TaskRunning,
+				Containers: []types.ContainerStateChange{
+					{
+						ContainerName: aws.String(containerName),
+						RuntimeId:     aws.String(runtimeID),
+						Status:        aws.String("RUNNING"),
+						NetworkBindings: []types.NetworkBinding{
+							ipv4PortBinding,
+							ipv6PortBinding,
+						},
+					},
+				},
+			})
+			assert.NoError(t, err)
+		})
+	}
 }
 
 func TestWithIPv6PortBindingExcludedSetTrue(t *testing.T) {
@@ -1773,4 +1991,18 @@ func extractTagsMapFromRegisterContainerInstanceInput(req *ecsservice.RegisterCo
 		tagsMap[aws.ToString(req.Tags[i].Key)] = aws.ToString(req.Tags[i].Value)
 	}
 	return tagsMap
+}
+
+func TestAvailableMemoryProvider(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	availableMemory := int32(42)
+	tester := setup(t, ctrl, ec2.NewBlackholeEC2MetadataClient(), nil,
+		WithAvailableMemoryProvider(func() int32 {
+			return availableMemory
+		}))
+
+	client := tester.client.(*ecsClient)
+	assert.Equal(t, availableMemory, client.availableMemoryProvider())
 }

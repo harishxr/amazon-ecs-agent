@@ -1,4 +1,60 @@
 # Changelog
+# 1.95.0
+* Enhancement - IPv6-only support
+  * Add support for IPv6 targets to network-latency and network-packet-loss faults [#4645](https://github.com/aws/amazon-ecs-agent/pull/4645)
+  * SubnetGatewayIPV6Address and IPv6SubnetCIDRBlock metadata for IPv6-only tasks [#4649](https://github.com/aws/amazon-ecs-agent/pull/4649)
+  * Network bindings for IPv6-only instances [#4651](https://github.com/aws/amazon-ecs-agent/pull/4651)
+  * ECS Client dual stack endpoint usage [#4652](https://github.com/aws/amazon-ecs-agent/pull/4652)
+  * Dual stack EC2 client on IPv6-only instances [#4658](https://github.com/aws/amazon-ecs-agent/pull/4658)
+  * Net utils for finding default network interfaces [#4665](https://github.com/aws/amazon-ecs-agent/pull/4665)
+* Enhancement - clean up v1 credentials chain [#4647](https://github.com/aws/amazon-ecs-agent/pull/4647)
+* Enhancement - Set DeviceName to eth1 for managed instances [#4636](https://github.com/aws/amazon-ecs-agent/pull/4636)
+* Enhancement - Migrate from github.com/docker/distribution/reference to github.com/distribution/reference [#4643](https://github.com/aws/amazon-ecs-agent/pull/4643)
+* Enhancement - Enable DualStack ECR Image URI [#4612](https://github.com/aws/amazon-ecs-agent/pull/4612)
+* Enhancement - Move duplicate awsrulesfn package to the ecs-agent module [#4661](https://github.com/aws/amazon-ecs-agent/pull/4661)
+* Enhancement - Fault Injection - Add a general error case for default network interface resolution errors [#4666](https://github.com/aws/amazon-ecs-agent/pull/4666)
+* Enhancement - Consume dns server from payload [#4668](https://github.com/aws/amazon-ecs-agent/pull/4668)
+* Enhancement - [TMDS Fault Injection] Improve network interface detection to handle multiple default interfaces in host mode and update IPv6-only task identification [#4670](https://github.com/aws/amazon-ecs-agent/pull/4670)
+* Bugfix - Make loopback interface lookup more robust [#4648](https://github.com/aws/amazon-ecs-agent/pull/4648)
+* Bugfix - SubnetGatewayIPv6Address metadata field name fix [#4650](https://github.com/aws/amazon-ecs-agent/pull/4650)
+* Bugfix - Remove duplicate ipcompatibilty package [#4654](https://github.com/aws/amazon-ecs-agent/pull/4654)
+* Bugfix: Network latency and packet loss faults should apply to all default network interfaces in host mode [#4671](https://github.com/aws/amazon-ecs-agent/pull/4671)
+
+# 1.94.0
+* Enhancement - aws-sdk-go-v2 migration
+  * Migrate awserr/request to aws-go-sdk-v2 [#4624](https://github.com/aws/amazon-ecs-agent/pull/4624)
+  * Migrate jsonutil to encoding/json for aws-sdk-go-v2 migration [#4626](https://github.com/aws/amazon-ecs-agent/pull/4626)
+* Enhancement - Add support for custom providers to determine the initial amount of available memory on a container instance [#4617](https://github.com/aws/amazon-ecs-agent/pull/4617)
+* Enhancement - IPv6-only support
+  * Include container IPv6 addresses (if available) in container metadata file for bridge mode tasks [#4616](https://github.com/aws/amazon-ecs-agent/pull/4616)
+  * Create a route for TMDS access on host mode on IPv6-only instances [#4633](https://github.com/aws/amazon-ecs-agent/pull/4633)
+  * Expand the network blackhole port to allow drop packets for IPv6 [#4629](https://github.com/aws/amazon-ecs-agent/pull/4629)
+  * Add a DualStackEnabled ECS client option and a SubnetGatewayIPV6Address field under NetworkInterfaceProperties [#4632](https://github.com/aws/amazon-ecs-agent/pull/4632)
+  * Use IPv6 addresses when generating extraHosts for IPv6-only awsvpc mode tasks [#4627](https://github.com/aws/amazon-ecs-agent/pull/4627)
+  * SSM Client resolves to dualstack endpoint on IPV6-only instances [#4623](https://github.com/aws/amazon-ecs-agent/pull/4623)
+  * Support task ENI setup for IPv6 only tasks [#4641](https://github.com/aws/amazon-ecs-agent/pull/4641)
+* Enhancement - Use ECS_AGENT_PID_NAMESPACE_HOST to run agent container in pid host mode [#4595](https://github.com/aws/amazon-ecs-agent/pull/4595)
+* Bugfix - reduce unnecessary "redundant state change" logs [#4639](https://github.com/aws/amazon-ecs-agent/pull/4639)
+
+# 1.93.1
+* Enhancement - aws-sdk-go-v2 migration
+  * ECR Client [#4550](https://github.com/aws/amazon-ecs-agent/pull/4550)
+  * S3 Client [#4564](https://github.com/aws/amazon-ecs-agent/pull/4564)
+  * TCS Client [#4554](https://github.com/aws/amazon-ecs-agent/pull/4554)
+  * SSM Client [#4611](https://github.com/aws/amazon-ecs-agent/pull/4611)
+  * FSx Client [#4621](https://github.com/aws/amazon-ecs-agent/pull/4621)
+  * ECS-agent shared library [#4583](https://github.com/aws/amazon-ecs-agent/pull/4583)
+  * Docker agent-related files [#4608](https://github.com/aws/amazon-ecs-agent/pull/4608)
+  * Add awslogs-endpoint for isolated regions [#4570](https://github.com/aws/amazon-ecs-agent/pull/4570)
+  * Replace v1 endpoints package with internal AWS SDK v2 partition metadata [#4614](https://github.com/aws/amazon-ecs-agent/pull/4614)
+* Enhancement - IPv6-only support
+  * S3 and S3Manager clients resolve to dualstack endpoint on IPV6-only instances [#4580](https://github.com/aws/amazon-ecs-agent/pull/4580)
+  * TaskProtection Client resolves to dualstack endpoint on IPV6-only instances [#4607](https://github.com/aws/amazon-ecs-agent/pull/4607)
+  * Populate IPv6 subnet gateway address from ACS payload [#4604](https://github.com/aws/amazon-ecs-agent/pull/4604)
+  * IPv6 default route for IPv6-only awsvpc tasks [#4603](https://github.com/aws/amazon-ecs-agent/pull/4603)
+  * Add IPv6 fields in the task network config for IPv6 only host mode tasks [#4605](https://github.com/aws/amazon-ecs-agent/pull/4605)
+* Bugfix - Adds RestartPolicy for ServiceConnect Relay Instance Task [#4602](https://github.com/aws/amazon-ecs-agent/pull/4602)
+
 # 1.93.0
 * Enhancement - Add visibility to the ECS Agent for the upcoming release of Windows Server 2025 ECS AMIs and adds integration test support for Windows Server 2025 [#4547](https://github.com/aws/amazon-ecs-agent/pull/4547)
 * Enhancement - Modify CW endpoint short term solution to include more regions [#4569](https://github.com/aws/amazon-ecs-agent/pull/4569)

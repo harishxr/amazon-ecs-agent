@@ -57,7 +57,6 @@ import (
 	ecsclient "github.com/aws/amazon-ecs-agent/ecs-agent/api/ecs/client"
 	apierrors "github.com/aws/amazon-ecs-agent/ecs-agent/api/errors"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials"
-	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials/instancecreds"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/credentials/providers"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/doctor"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/ec2"
@@ -69,11 +68,9 @@ import (
 	"github.com/aws/amazon-ecs-agent/ecs-agent/utils/retry"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/wsclient"
 
-	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs/types"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	aws_credentials "github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/smithy-go"
 	"github.com/cihub/seelog"
 	"github.com/pborman/uuid"
 )
@@ -147,8 +144,7 @@ type ecsAgent struct {
 	dataClient                  data.Client
 	dockerClient                dockerapi.DockerClient
 	containerInstanceARN        string
-	credentialProvider          *aws_credentials.Credentials
-	credentialsCache            *awsv2.CredentialsCache
+	credentialsCache            *aws.CredentialsCache
 	stateManagerFactory         factory.StateManager
 	saveableOptionFactory       factory.SaveableOption
 	pauseLoader                 loader.Loader
@@ -202,7 +198,7 @@ func newAgent(blackholeEC2Metadata bool, acceptInsecureCert *bool) (agent, error
 		cancel()
 		return nil, err
 	}
-	cfg.AcceptInsecureCert = aws.BoolValue(acceptInsecureCert)
+	cfg.AcceptInsecureCert = aws.ToBool(acceptInsecureCert)
 	if cfg.AcceptInsecureCert {
 		seelog.Warn("SSL certificate verification disabled. This is not recommended.")
 	}
@@ -214,7 +210,11 @@ func newAgent(blackholeEC2Metadata bool, acceptInsecureCert *bool) (agent, error
 		cfg.NoIID = true
 	}
 
-	ec2Client, err := ec2.NewClientImpl(cfg.AWSRegion)
+	ec2ClientDualStackEndpointState := aws.DualStackEndpointStateDisabled
+	if cfg.InstanceIPCompatibility.IsIPv6Only() {
+		ec2ClientDualStackEndpointState = aws.DualStackEndpointStateEnabled
+	}
+	ec2Client, err := ec2.NewClientImpl(cfg.AWSRegion, ec2ClientDualStackEndpointState)
 	if err != nil {
 		logger.Critical("Error creating EC2 client", logger.Fields{
 			field.Error: err,
@@ -272,7 +272,6 @@ func newAgent(blackholeEC2Metadata bool, acceptInsecureCert *bool) (agent, error
 		// We instantiate our own credentialProvider for use in acs/tcs. This tries
 		// to mimic roughly the way it's instantiated by the SDK for a default
 		// session.
-		credentialProvider:          instancecreds.GetCredentials(cfg.External.Enabled()),
 		credentialsCache:            credentialsCache,
 		stateManagerFactory:         factory.NewStateManager(),
 		saveableOptionFactory:       factory.NewSaveableOption(),
@@ -300,7 +299,7 @@ func (agent *ecsAgent) printECSAttributes() int {
 		return exitcodes.ExitError
 	}
 	for _, attr := range capabilities {
-		fmt.Printf("%s\t%s\n", aws.StringValue(attr.Name), aws.StringValue(attr.Value))
+		fmt.Printf("%s\t%s\n", aws.ToString(attr.Name), aws.ToString(attr.Value))
 	}
 	return exitcodes.ExitSuccess
 }
@@ -324,8 +323,22 @@ func (agent *ecsAgent) start() int {
 		})
 		return exitcodes.ExitError
 	}
+
+	// Options for ECS Client
+	ecsClientOpts := []ecsclient.ECSClientOption{
+		// We always exclude IPv4 bindings for IPv6-only instances
+		// as they are assumed to NOT be reachable over IPv4.
+		ecsclient.WithIPv4PortBindingExcluded(agent.cfg.InstanceIPCompatibility.IsIPv6Only()),
+
+		// Exclusion of IPv6 port bindings is controlled by configuration for historical reasons.
+		ecsclient.WithIPv6PortBindingExcluded(agent.cfg.ShouldExcludeIPv6PortBinding.Enabled()),
+
+		// If instance is IPv6-only then we must use dualstack ECS endpoints
+		ecsclient.WithDualStackEnabled(agent.cfg.InstanceIPCompatibility.IsIPv6Only()),
+	}
+
 	clientFactory := ecsclient.NewECSClientFactory(agent.credentialsCache, cfgAccessor, agent.ec2MetadataClient,
-		version.String(), ecsclient.WithIPv6PortBindingExcluded(true))
+		version.String(), ecsClientOpts...)
 	client, err := clientFactory.NewClient()
 	if err != nil {
 		logger.Critical("Unable to create new ECS client", logger.Fields{
@@ -991,7 +1004,7 @@ func (agent *ecsAgent) startAsyncRoutines(
 	}
 	go statsEngine.StartMetricsPublish()
 
-	session, err := reporter.NewDockerTelemetrySession(agent.containerInstanceARN, agent.credentialProvider, agent.cfg, deregisterInstanceEventStream,
+	session, err := reporter.NewDockerTelemetrySession(agent.containerInstanceARN, agent.credentialsCache, agent.cfg, deregisterInstanceEventStream,
 		client, taskEngine, telemetryMessages, healthMessages, doctor)
 	if err != nil {
 		seelog.Warnf("Error creating telemetry session: %v", err)
@@ -1171,11 +1184,11 @@ func mergeTags(localTags []types.Tag, ec2Tags []types.Tag) []types.Tag {
 	tagsMap := make(map[string]string)
 
 	for _, ec2Tag := range ec2Tags {
-		tagsMap[aws.StringValue(ec2Tag.Key)] = aws.StringValue(ec2Tag.Value)
+		tagsMap[aws.ToString(ec2Tag.Key)] = aws.ToString(ec2Tag.Value)
 	}
 
 	for _, localTag := range localTags {
-		tagsMap[aws.StringValue(localTag.Key)] = aws.StringValue(localTag.Value)
+		tagsMap[aws.ToString(localTag.Key)] = aws.ToString(localTag.Value)
 	}
 
 	return utils.MapToTags(tagsMap)
@@ -1249,11 +1262,11 @@ func (agent *ecsAgent) setVPCSubnet() (error, bool) {
 	return nil, false
 }
 
-// isInstanceLaunchedInVPC returns false when the awserr returned is an EC2MetadataError
+// isInstanceLaunchedInVPC returns false when the error returned is an EC2MetadataError
 // when querying the vpc id from instance metadata
 func isInstanceLaunchedInVPC(err error) bool {
-	if aerr, ok := err.(awserr.Error); ok &&
-		aerr.Code() == "EC2MetadataError" {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && apiErr.ErrorCode() == "EC2MetadataError" {
 		return false
 	}
 	return true
