@@ -1,0 +1,96 @@
+func environmentConfig() (Config, error) {
+	dataDir := os.Getenv("ECS_DATADIR")
+
+	steadyStateRate, burstRate := parseTaskMetadataThrottles()
+
+	var errs []error
+	instanceAttributes, errs := parseInstanceAttributes(errs)
+
+	containerInstanceTags, errs := parseContainerInstanceTags(errs)
+
+	additionalLocalRoutes, errs := parseAdditionalLocalRoutes(errs)
+
+	var err error
+	if len(errs) > 0 {
+		err = apierrors.NewMultiError(errs...)
+	}
+	return Config{
+		Cluster:                             os.Getenv("ECS_CLUSTER"),
+		APIEndpoint:                         os.Getenv("ECS_BACKEND_HOST"),
+		AWSRegion:                           os.Getenv("AWS_DEFAULT_REGION"),
+		DockerEndpoint:                      os.Getenv("DOCKER_HOST"),
+		ReservedPorts:                       parseReservedPorts("ECS_RESERVED_PORTS"),
+		ReservedPortsUDP:                    parseReservedPorts("ECS_RESERVED_PORTS_UDP"),
+		DataDir:                             dataDir,
+		Checkpoint:                          parseCheckpoint(dataDir),
+		EngineAuthType:                      os.Getenv("ECS_ENGINE_AUTH_TYPE"),
+		EngineAuthData:                      NewSensitiveRawMessage([]byte(os.Getenv("ECS_ENGINE_AUTH_DATA"))),
+		UpdatesEnabled:                      parseBooleanDefaultFalseConfig("ECS_UPDATES_ENABLED"),
+		UpdateDownloadDir:                   os.Getenv("ECS_UPDATE_DOWNLOAD_DIR"),
+		DisableMetrics:                      parseBooleanDefaultFalseConfig("ECS_DISABLE_METRICS"),
+		ReservedMemory:                      parseEnvVariableUint16("ECS_RESERVED_MEMORY"),
+		AvailableLoggingDrivers:             parseAvailableLoggingDrivers(),
+		PrivilegedDisabled:                  parseBooleanDefaultFalseConfig("ECS_DISABLE_PRIVILEGED"),
+		SELinuxCapable:                      parseBooleanDefaultFalseConfig("ECS_SELINUX_CAPABLE"),
+		AppArmorCapable:                     parseBooleanDefaultFalseConfig("ECS_APPARMOR_CAPABLE"),
+		TaskCleanupWaitDuration:             parseEnvVariableDuration("ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION"),
+		TaskCleanupWaitDurationJitter:       parseEnvVariableDuration("ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION_JITTER"),
+		TaskENIEnabled:                      parseBooleanDefaultFalseConfig("ECS_ENABLE_TASK_ENI"),
+		TaskIAMRoleEnabled:                  parseBooleanDefaultFalseConfig("ECS_ENABLE_TASK_IAM_ROLE"),
+		DeleteNonECSImagesEnabled:           parseBooleanDefaultFalseConfig("ECS_ENABLE_UNTRACKED_IMAGE_CLEANUP"),
+		TaskCPUMemLimit:                     parseBooleanDefaultTrueConfig("ECS_ENABLE_TASK_CPU_MEM_LIMIT"),
+		DockerStopTimeout:                   parseDockerStopTimeout(),
+		ManifestPullTimeout:                 parseManifestPullTimeout(),
+		ContainerStartTimeout:               parseContainerStartTimeout(),
+		ContainerCreateTimeout:              parseContainerCreateTimeout(),
+		DependentContainersPullUpfront:      parseBooleanDefaultFalseConfig("ECS_PULL_DEPENDENT_CONTAINERS_UPFRONT"),
+		ImagePullInactivityTimeout:          parseImagePullInactivityTimeout(),
+		ImagePullTimeout:                    parseEnvVariableDuration("ECS_IMAGE_PULL_TIMEOUT"),
+		CredentialsAuditLogFile:             os.Getenv("ECS_AUDIT_LOGFILE"),
+		CredentialsAuditLogDisabled:         utils.ParseBool(os.Getenv("ECS_AUDIT_LOGFILE_DISABLED"), false),
+		TaskIAMRoleEnabledForNetworkHost:    utils.ParseBool(os.Getenv("ECS_ENABLE_TASK_IAM_ROLE_NETWORK_HOST"), false),
+		ImageCleanupDisabled:                parseBooleanDefaultFalseConfig("ECS_DISABLE_IMAGE_CLEANUP"),
+		MinimumImageDeletionAge:             parseEnvVariableDuration("ECS_IMAGE_MINIMUM_CLEANUP_AGE"),
+		NonECSMinimumImageDeletionAge:       parseEnvVariableDuration("NON_ECS_IMAGE_MINIMUM_CLEANUP_AGE"),
+		ImageCleanupInterval:                parseEnvVariableDuration("ECS_IMAGE_CLEANUP_INTERVAL"),
+		NumImagesToDeletePerCycle:           parseNumImagesToDeletePerCycle(),
+		NumNonECSContainersToDeletePerCycle: parseNumNonECSContainersToDeletePerCycle(),
+		ImagePullBehavior:                   parseImagePullBehavior(),
+		ImageCleanupExclusionList:           parseImageCleanupExclusionList("ECS_EXCLUDE_UNTRACKED_IMAGE"),
+		InstanceAttributes:                  instanceAttributes,
+		CNIPluginsPath:                      os.Getenv("ECS_CNI_PLUGINS_PATH"),
+		AWSVPCBlockInstanceMetdata:          parseBooleanDefaultFalseConfig("ECS_AWSVPC_BLOCK_IMDS"),
+		AWSVPCAdditionalLocalRoutes:         additionalLocalRoutes,
+		ContainerMetadataEnabled:            parseBooleanDefaultFalseConfig("ECS_ENABLE_CONTAINER_METADATA"),
+		DataDirOnHost:                       os.Getenv("ECS_HOST_DATA_DIR"),
+		OverrideAWSLogsExecutionRole:        parseBooleanDefaultFalseConfig("ECS_ENABLE_AWSLOGS_EXECUTIONROLE_OVERRIDE"),
+		CgroupPath:                          os.Getenv("ECS_CGROUP_PATH"),
+		TaskMetadataSteadyStateRate:         steadyStateRate,
+		TaskMetadataBurstRate:               burstRate,
+		SharedVolumeMatchFullConfig:         parseBooleanDefaultFalseConfig("ECS_SHARED_VOLUME_MATCH_FULL_CONFIG"),
+		ContainerInstanceTags:               containerInstanceTags,
+		ContainerInstancePropagateTagsFrom:  parseContainerInstancePropagateTagsFrom(),
+		PollMetrics:                         parseBooleanDefaultFalseConfig("ECS_POLL_METRICS"),
+		PollingMetricsWaitDuration:          parseEnvVariableDuration("ECS_POLLING_METRICS_WAIT_DURATION"),
+		DisableDockerHealthCheck:            parseBooleanDefaultFalseConfig("ECS_DISABLE_DOCKER_HEALTH_CHECK"),
+		GPUSupportEnabled:                   utils.ParseBool(os.Getenv("ECS_ENABLE_GPU_SUPPORT"), false),
+		EBSTASupportEnabled:                 utils.ParseBool(os.Getenv("ECS_EBSTA_SUPPORTED"), true),
+		InferentiaSupportEnabled:            utils.ParseBool(os.Getenv("ECS_ENABLE_INF_SUPPORT"), false),
+		NvidiaRuntime:                       os.Getenv("ECS_NVIDIA_RUNTIME"),
+		TaskMetadataAZDisabled:              utils.ParseBool(os.Getenv("ECS_DISABLE_TASK_METADATA_AZ"), false),
+		CgroupCPUPeriod:                     parseCgroupCPUPeriod(),
+		SpotInstanceDrainingEnabled:         parseBooleanDefaultFalseConfig("ECS_ENABLE_SPOT_INSTANCE_DRAINING"),
+		GMSACapable:                         parseGMSACapability(),
+		GMSADomainlessCapable:               parseGMSADomainlessCapability(),
+		VolumePluginCapabilities:            parseVolumePluginCapabilities(),
+		FSxWindowsFileServerCapable:         parseFSxWindowsFileServerCapability(),
+		External:                            parseBooleanDefaultFalseConfig("ECS_EXTERNAL"),
+		EnableRuntimeStats:                  parseBooleanDefaultFalseConfig("ECS_ENABLE_RUNTIME_STATS"),
+		ShouldExcludeIPv6PortBinding:        parseBooleanDefaultTrueConfig("ECS_EXCLUDE_IPV6_PORTBINDING"),
+		WarmPoolsSupport:                    parseBooleanDefaultFalseConfig("ECS_WARM_POOLS_CHECK"),
+		DynamicHostPortRange:                parseDynamicHostPortRange("ECS_DYNAMIC_HOST_PORT_RANGE"),
+		TaskPidsLimit:                       parseTaskPidsLimit(),
+		FirelensAsyncEnabled:                parseBooleanDefaultTrueConfig("ECS_ENABLE_FIRELENS_ASYNC"),
+		DisableTMDSListTagsForResource:      parseBooleanDefaultFalseConfig("Disable_TMDS_ListTagsForResource"),
+	}, err
+}

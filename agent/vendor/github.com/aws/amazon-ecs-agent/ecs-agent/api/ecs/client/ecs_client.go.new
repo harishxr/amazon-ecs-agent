@@ -1,0 +1,13 @@
+func (client *ecsClient) GetResourceTags(resourceArn string) ([]types.Tag, error) {
+	if client.configAccessor.DisableTMDSListTagsForResource() {
+		logger.Info("ListTagsForResource API call is disabled by Disable_TMDS_ListTagsForResource")
+		return []types.Tag{}, nil
+	}
+	output, err := client.standardClient.ListTagsForResource(context.TODO(), &ecsservice.ListTagsForResourceInput{
+		ResourceArn: &resourceArn,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return output.Tags, nil
+}
