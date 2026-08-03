@@ -774,19 +774,26 @@ func (task *Task) applyFirelensSetup(cfg *config.Config, resourceFields *taskres
 func (task *Task) addGPUResource(cfg *config.Config) error {
 	if cfg.GPUSupportEnabled {
 		for _, association := range task.Associations {
-			// One GPU can be associated with only one container
-			// That is why validating if association.Containers is of length 1
 			if association.Type == GPUAssociationType {
-				if len(association.Containers) != 1 {
+				// A whole-GPU association stays pinned one-container-per-GPU.
+				// MPS relaxes this: multiple MPS containers may colocate on a
+				// single GPU (colocation decision MPS-006), so the guard is
+				// skipped only when every container in the association is an MPS
+				// container. Each container is still assigned the one shared GPU
+				// UUID (association.Name), preserving the one-UUID-per-container
+				// invariant that the runtime remaps to in-container device 0.
+				if len(association.Containers) != 1 && !task.allAssociationContainersMPS(association) {
 					return fmt.Errorf("could not associate multiple containers to GPU %s", association.Name)
 				}
 
-				container, ok := task.ContainerByName(association.Containers[0])
-				if !ok {
-					return fmt.Errorf("could not find container with name %s for associating GPU %s",
-						association.Containers[0], association.Name)
+				for _, containerName := range association.Containers {
+					container, ok := task.ContainerByName(containerName)
+					if !ok {
+						return fmt.Errorf("could not find container with name %s for associating GPU %s",
+							containerName, association.Name)
+					}
+					container.GPUIDs = append(container.GPUIDs, association.Name)
 				}
-				container.GPUIDs = append(container.GPUIDs, association.Name)
 			}
 		}
 		// For external instances, GPU IDs are handled by resources struct
@@ -806,6 +813,23 @@ func (task *Task) isGPUEnabled() bool {
 		}
 	}
 	return false
+}
+
+// allAssociationContainersMPS reports whether every container in a GPU
+// association declares NVIDIA MPS GPU sharing. Only then may they colocate on a
+// single GPU (MPS-006); a single non-MPS container in the association keeps the
+// whole-GPU one-container-per-GPU pin. An empty association is not MPS.
+func (task *Task) allAssociationContainersMPS(association Association) bool {
+	if len(association.Containers) == 0 {
+		return false
+	}
+	for _, containerName := range association.Containers {
+		container, ok := task.ContainerByName(containerName)
+		if !ok || !container.UsesMPS() {
+			return false
+		}
+	}
+	return true
 }
 
 func (task *Task) populateGPUEnvironmentVariables() {
