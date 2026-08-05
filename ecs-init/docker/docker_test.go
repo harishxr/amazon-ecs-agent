@@ -433,6 +433,69 @@ func TestStartAgentWithGPUConfig(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestStartAgentWithGPUConfigMPSMounts verifies that on a GPU instance where the
+// MPS control binary and pipe directory exist, both are bind mounted into the
+// agent container so the agent can health-check the MPS control daemon.
+func TestStartAgentWithGPUConfigMPSMounts(t *testing.T) {
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+	// Report every checked path as present so the MPS binds are added.
+	isPathValid = func(path string, isDir bool) bool {
+		return true
+	}
+	defer func() {
+		isPathValid = defaultIsPathValid
+	}()
+
+	config.OsStat = func(name string) (os.FileInfo, error) {
+		return nil, nil
+	}
+	defer func() {
+		config.OsStat = os.Stat
+	}()
+
+	envFile := "\nECS_ENABLE_GPU_SUPPORT=true\n"
+	containerID := "container id"
+
+	defer func() {
+		MatchFilePatternForGPU = FilePatternMatchForGPU
+	}()
+	MatchFilePatternForGPU = func(pattern string) ([]string, error) {
+		return []string{"/dev/nvidia0"}, nil
+	}
+
+	mockFS := NewMockfileSystem(mockCtrl)
+	mockDocker := NewMockdockerclient(mockCtrl)
+
+	mockFS.EXPECT().ReadFile(config.InstanceConfigFile()).Return([]byte(envFile), nil).AnyTimes()
+	mockFS.EXPECT().ReadFile(config.AgentConfigFile()).Return(nil, errors.New("not found")).AnyTimes()
+	mockDocker.EXPECT().CreateContainer(gomock.Any()).Do(func(opts godocker.CreateContainerOptions) {
+		var foundBinary, foundPipe bool
+		for _, bind := range opts.HostConfig.Binds {
+			if bind == mpsControlBinary+":"+mpsControlBinary+readOnly {
+				foundBinary = true
+			}
+			if bind == mpsPipeDirectory+":"+mpsPipeDirectory {
+				foundPipe = true
+			}
+		}
+		assert.True(t, foundBinary, "MPS control binary should be bind mounted read-only")
+		assert.True(t, foundPipe, "MPS pipe directory should be bind mounted read-write")
+	}).Return(&godocker.Container{
+		ID: containerID,
+	}, nil)
+	mockDocker.EXPECT().StartContainer(containerID, nil)
+	mockDocker.EXPECT().WaitContainer(containerID)
+
+	client := &client{
+		docker: mockDocker,
+		fs:     mockFS,
+	}
+
+	_, err := client.StartAgent()
+	assert.NoError(t, err)
+}
+
 func TestStartAgentWithGPUConfigNoDevices(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	defer mockCtrl.Finish()
