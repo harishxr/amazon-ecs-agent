@@ -364,6 +364,11 @@ func TaskFromACS(acsTask *ecsacs.Task, envelope *ecsacs.PayloadMessage) (*Task, 
 		return nil, err
 	}
 
+	// MOCK (live test only, task_mps_livetest_mock.go): synthesize the ACS GPU
+	// sharingStrategy from a docker label since the real RTD->ACS path does not
+	// carry it yet. Delete with the mock file before merge.
+	mockInjectMPSSharingStrategyFromLabels(acsTask)
+
 	// validate the GPU sharing strategy on resource requirements and map it onto
 	// the internal containers before the task is acted on
 	if err := applyGPUResourceRequirements(acsTask, task); err != nil {
