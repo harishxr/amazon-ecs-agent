@@ -13,7 +13,14 @@
 
 package mps
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/aws/amazon-ecs-agent/ecs-agent/utils/execwrapper"
+)
 
 const (
 	// PipeDirectory is the MPS control daemon's Unix domain socket directory. It
@@ -34,6 +41,22 @@ const (
 
 	// inContainerDeviceIndex is the device index the memory limit is keyed on.
 	inContainerDeviceIndex = 0
+
+	// ControlBinary is the MPS control front-end binary. Execing it with a
+	// control command checks daemon readiness; it talks to the daemon socket
+	// under CUDA_MPS_PIPE_DIRECTORY.
+	ControlBinary = "/usr/bin/nvidia-cuda-mps-control"
+
+	// ProbeCommand is the control command fed to the front-end. It is a
+	// control-daemon query that works even before any MPS client exists, and the
+	// front-end exit code reflects daemon reachability regardless of the command,
+	// so it serves as a liveness check.
+	ProbeCommand = "get_default_active_thread_percentage"
+
+	// ProbeTimeout bounds the probe exec. A wedged daemon accepts the socket
+	// connection but never replies, hanging the front-end; the context timeout
+	// turns that hang into a failure instead.
+	ProbeTimeout = 3 * time.Second
 )
 
 // BuildEnv returns the MPS environment variables for a single MPS container.
@@ -52,4 +75,59 @@ func BuildEnv(memoryMiB uint, computePercent *uint) map[string]string {
 // (in-container index 0) GPU as MPS expects it: "0=<MiB>M".
 func PinnedDeviceMemLimit(memoryMiB uint) string {
 	return fmt.Sprintf("%d=%dM", inContainerDeviceIndex, memoryMiB)
+}
+
+// ProbeResult captures everything observable from one health-probe exec.
+type ProbeResult struct {
+	// ExitCode is the front-end exit code: 0 means the daemon is reachable, -1
+	// means the process could not be run or was killed by the context timeout
+	// (in which case TimedOut is true and Err is set).
+	ExitCode int
+	// Stdout is the trimmed combined stdout/stderr of the probe.
+	Stdout string
+	// Latency is the wall-clock time the probe exec took.
+	Latency time.Duration
+	// TimedOut is true when the context deadline fired.
+	TimedOut bool
+	// Err is non-nil when the daemon is not functionally serving.
+	Err error
+}
+
+// ProbeControlDaemon reports whether the MPS control daemon is serving. It feeds
+// command to the front-end on stdin and treats an exit with code 0 within
+// ProbeTimeout as serving.
+func ProbeControlDaemon(exec execwrapper.Exec, command string) ProbeResult {
+	ctx, cancel := exec.NewExecContextWithTimeout(context.Background(), ProbeTimeout)
+	defer cancel()
+
+	// Exec the binary directly and feed the command on stdin. Do not use `sh -c`:
+	// the agent image has no /bin/sh. Passing the command as a CLI arg also does
+	// not work (the front-end exits 0 but emits nothing).
+	cmd := exec.CommandContext(ctx, ControlBinary)
+	cmd.SetIOStreams(strings.NewReader(command+"\n"), nil, nil)
+
+	start := time.Now()
+	out, err := cmd.CombinedOutput()
+
+	result := ProbeResult{
+		Stdout:   strings.TrimSpace(string(out)),
+		Latency:  time.Since(start),
+		TimedOut: ctx.Err() == context.DeadlineExceeded,
+	}
+	if err == nil {
+		result.ExitCode = 0
+		return result
+	}
+
+	if exitErr, ok := exec.ConvertToExitError(err); ok {
+		result.ExitCode = exec.GetExitCode(exitErr)
+	} else {
+		result.ExitCode = -1
+	}
+	if result.TimedOut {
+		result.Err = fmt.Errorf("mps control daemon probe timed out after %s (daemon wedged?): %w", ProbeTimeout, err)
+	} else {
+		result.Err = fmt.Errorf("mps control daemon probe failed (exit %d, output %q): %w", result.ExitCode, result.Stdout, err)
+	}
+	return result
 }

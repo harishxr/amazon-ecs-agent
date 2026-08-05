@@ -22,6 +22,7 @@ import (
 	"github.com/aws/amazon-ecs-agent/agent/dockerclient/dockerapi"
 	"github.com/aws/amazon-ecs-agent/agent/gpu"
 	cgroup "github.com/aws/amazon-ecs-agent/agent/taskresource/cgroup/control"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/utils/execwrapper"
 )
 
 // ResourceFields is the list of fields required for creation of task resources
@@ -32,4 +33,5 @@ type ResourceFields struct {
 	Ctx              context.Context
 	DockerClient     dockerapi.DockerClient
 	NvidiaGPUManager gpu.GPUManager
+	Exec execwrapper.Exec
 }

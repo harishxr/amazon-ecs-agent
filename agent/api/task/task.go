@@ -525,6 +525,14 @@ func (task *Task) PostUnmarshalTask(cfg *config.Config,
 		return apierrors.NewResourceInitError(task.Arn, err)
 	}
 
+	if err := task.initializeMPSDaemonResource(resourceFields); err != nil {
+		logger.Error("Could not initialize MPS daemon health-gate resource", logger.Fields{
+			field.TaskID: task.GetID(),
+			field.Error:  err,
+		})
+		return apierrors.NewResourceInitError(task.Arn, err)
+	}
+
 	task.initializeContainersV3MetadataEndpoint(utils.NewDynamicUUIDProvider())
 	task.initializeContainersV4MetadataEndpoint(utils.NewDynamicUUIDProvider())
 	task.initializeContainersV1AgentAPIEndpoint(utils.NewDynamicUUIDProvider())
@@ -803,6 +811,20 @@ func (task *Task) addGPUResource(cfg *config.Config) error {
 func (task *Task) isGPUEnabled() bool {
 	for _, association := range task.Associations {
 		if association.Type == GPUAssociationType {
+			return true
+		}
+	}
+	return false
+}
+
+// IsMPS reports whether any container in the task declares an MPS sharing
+// strategy. It gates the MPS control-daemon health-gate resource; whole-GPU and
+// non-GPU tasks return false and are never gated. Tasks that mix MPS and
+// whole-GPU containers are rejected at the control plane, so "any" is sufficient
+// here.
+func (task *Task) IsMPS() bool {
+	for _, container := range task.Containers {
+		if container.UsesMPS() {
 			return true
 		}
 	}

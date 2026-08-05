@@ -27,6 +27,7 @@ import (
 	"github.com/aws/amazon-ecs-agent/agent/ecscni"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource/cgroup"
+	"github.com/aws/amazon-ecs-agent/agent/taskresource/mpsdaemon"
 	resourcestatus "github.com/aws/amazon-ecs-agent/agent/taskresource/status"
 	resourcetype "github.com/aws/amazon-ecs-agent/agent/taskresource/types"
 	taskresourcevolume "github.com/aws/amazon-ecs-agent/agent/taskresource/volume"
@@ -37,6 +38,8 @@ import (
 	"github.com/aws/amazon-ecs-agent/ecs-agent/logger/field"
 	ni "github.com/aws/amazon-ecs-agent/ecs-agent/netlib/model/networkinterface"
 	"github.com/aws/amazon-ecs-agent/ecs-agent/utils/arn"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/utils/execwrapper"
+	"github.com/aws/amazon-ecs-agent/ecs-agent/utils/mps"
 	"github.com/cihub/seelog"
 	"github.com/containernetworking/cni/libcni"
 	dockercontainer "github.com/docker/docker/api/types/container"
@@ -115,6 +118,27 @@ func (task *Task) initializeCgroupResourceSpec(cgroupPath string, cGroupCPUPerio
 		container.BuildResourceDependency(cgroupResource.GetName(),
 			resourcestatus.ResourceStatus(cgroup.CgroupCreated),
 			apicontainerstatus.ContainerPulled)
+	}
+	return nil
+}
+
+// initializeMPSDaemonResource adds the MPS control-daemon health-gate resource,
+// but only for MPS tasks. Every container is made to depend on the resource
+// reaching VERIFIED before it can be created, so a failed probe blocks the task.
+func (task *Task) initializeMPSDaemonResource(resourceFields *taskresource.ResourceFields) error {
+	if !task.IsMPS() {
+		return nil
+	}
+	var exec execwrapper.Exec
+	if resourceFields != nil {
+		exec = resourceFields.Exec
+	}
+	mpsResource := mpsdaemon.NewMPSDaemonResource(task.Arn, exec, mps.ProbeCommand)
+	task.AddResource(resourcetype.MPSDaemonKey, mpsResource)
+	for _, container := range task.Containers {
+		container.BuildResourceDependency(mpsResource.GetName(),
+			resourcestatus.ResourceStatus(mpsdaemon.MPSDaemonVerified),
+			apicontainerstatus.ContainerCreated)
 	}
 	return nil
 }

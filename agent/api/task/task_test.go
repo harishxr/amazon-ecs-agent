@@ -3604,6 +3604,29 @@ func TestAddGPUResourceWithInvalidContainer(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestIsMPS verifies the MPS-task predicate that gates the daemon health-gate
+// resource: true if at least one container declares MPS.
+func TestIsMPS(t *testing.T) {
+	mpsTask := &Task{
+		Containers: []*apicontainer.Container{
+			{Name: "plain"},
+			{Name: "mps", MPSConfig: &apicontainer.MPSConfig{Memory: 4096}},
+		},
+	}
+	assert.True(t, mpsTask.IsMPS(), "a task with an MPS container is an MPS task")
+
+	wholeGPUTask := &Task{
+		Containers: []*apicontainer.Container{
+			{Name: "a", GPUIDs: []string{"gpu1"}},
+			{Name: "b"},
+		},
+	}
+	assert.False(t, wholeGPUTask.IsMPS(), "a whole-GPU task is not an MPS task")
+
+	nonGPUTask := &Task{Containers: []*apicontainer.Container{{Name: "a"}}}
+	assert.False(t, nonGPUTask.IsMPS(), "a non-GPU task is not an MPS task")
+}
+
 func TestPopulateGPUEnvironmentVariables(t *testing.T) {
 	container := &apicontainer.Container{
 		Name:   "myName",
