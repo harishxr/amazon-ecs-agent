@@ -33,7 +33,10 @@ import (
 	"github.com/aws/amazon-ecs-agent/agent/taskresource/asmsecret"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource/cgroup/control/mock_control"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource/firelens"
+	"github.com/aws/amazon-ecs-agent/agent/taskresource/mpsdaemon"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource/ssmsecret"
+	resourcestatus "github.com/aws/amazon-ecs-agent/agent/taskresource/status"
+	resourcetype "github.com/aws/amazon-ecs-agent/agent/taskresource/types"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource/volume"
 	mock_ioutilwrapper "github.com/aws/amazon-ecs-agent/agent/utils/ioutilwrapper/mocks"
 	apicontainerstatus "github.com/aws/amazon-ecs-agent/ecs-agent/api/container/status"
@@ -1872,4 +1875,65 @@ func TestGetSupplementaryGroups(t *testing.T) {
 			assert.Equal(t, tc.expectedGroups, groups)
 		})
 	}
+}
+
+func TestIsMPS(t *testing.T) {
+	mpsContainer := &apicontainer.Container{
+		Name:      "mps",
+		MPSConfig: &apicontainer.MPSConfig{Memory: 4096},
+	}
+	plainContainer := &apicontainer.Container{Name: "plain"}
+
+	assert.False(t, (&Task{Containers: []*apicontainer.Container{plainContainer}}).IsMPS(),
+		"a task with no MPS container must not be gated")
+	assert.True(t, (&Task{Containers: []*apicontainer.Container{plainContainer, mpsContainer}}).IsMPS(),
+		"any MPS container makes the task an MPS task")
+	assert.False(t, (&Task{}).IsMPS(), "a task with no containers must not be gated")
+}
+
+func TestInitializeMPSDaemonResource(t *testing.T) {
+	t.Run("non-MPS task gets no gate", func(t *testing.T) {
+		task := &Task{
+			Arn:                "arn:aws:ecs:us-west-2:123456789012:task/cluster/abc",
+			Containers:         []*apicontainer.Container{{Name: "plain"}},
+			ResourcesMapUnsafe: make(map[string][]taskresource.TaskResource),
+		}
+		require.NoError(t, task.initializeMPSDaemonResource(nil))
+		_, ok := task.ResourcesMapUnsafe[resourcetype.MPSDaemonKey]
+		assert.False(t, ok, "a non-MPS task must not carry the health gate")
+	})
+
+	t.Run("MPS task gets the gate and every container depends on it", func(t *testing.T) {
+		c1 := &apicontainer.Container{
+			Name:                      "mps",
+			MPSConfig:                 &apicontainer.MPSConfig{Memory: 4096},
+			TransitionDependenciesMap: make(map[apicontainerstatus.ContainerStatus]apicontainer.TransitionDependencySet),
+		}
+		c2 := &apicontainer.Container{
+			Name:                      "sidecar",
+			TransitionDependenciesMap: make(map[apicontainerstatus.ContainerStatus]apicontainer.TransitionDependencySet),
+		}
+		task := &Task{
+			Arn:                "arn:aws:ecs:us-west-2:123456789012:task/cluster/abc",
+			Containers:         []*apicontainer.Container{c1, c2},
+			ResourcesMapUnsafe: make(map[string][]taskresource.TaskResource),
+		}
+
+		require.NoError(t, task.initializeMPSDaemonResource(nil))
+
+		res, ok := task.ResourcesMapUnsafe[resourcetype.MPSDaemonKey]
+		require.True(t, ok, "an MPS task must carry the health gate")
+		require.Len(t, res, 1)
+		assert.Equal(t, mpsdaemon.ResourceName, res[0].GetName())
+
+		// Both containers, not just the MPS one, must wait for the gate: they share
+		// the GPU, so starting the sidecar first buys nothing and loses the ordering.
+		for _, c := range task.Containers {
+			deps := c.TransitionDependenciesMap[apicontainerstatus.ContainerCreated].ResourceDependencies
+			require.Len(t, deps, 1, "container %s must depend on the gate", c.Name)
+			assert.Equal(t, mpsdaemon.ResourceName, deps[0].Name)
+			assert.Equal(t, resourcestatus.ResourceStatus(mpsdaemon.MPSDaemonCreated),
+				deps[0].GetRequiredStatus())
+		}
+	})
 }

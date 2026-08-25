@@ -501,6 +501,16 @@ func (task *Task) PostUnmarshalTask(cfg *config.Config,
 		return apierrors.NewResourceInitError(task.Arn, err)
 	}
 
+	// Gate MPS tasks on the MPS control daemon being functionally available. A
+	// container that starts while the daemon is down silently loses its memory cap.
+	if err := task.initializeMPSDaemonResource(resourceFields); err != nil {
+		logger.Error("Could not initialize MPS daemon health gate resource", logger.Fields{
+			field.TaskID: task.GetID(),
+			field.Error:  err,
+		})
+		return apierrors.NewResourceInitError(task.Arn, err)
+	}
+
 	if err := task.initServiceConnectResources(); err != nil {
 		logger.Error("Could not initialize Service Connect resources", logger.Fields{
 			field.TaskID: task.GetID(),
@@ -3358,6 +3368,19 @@ func (task *Task) getResourcesUnsafe() []taskresource.TaskResource {
 		resourceList = append(resourceList, resources...)
 	}
 	return resourceList
+}
+
+// IsMPS reports whether any container in the task declares an MPS sharing
+// strategy. Whole-GPU and non-GPU tasks return false and are never gated. Tasks
+// mixing MPS and whole-GPU containers are rejected at the control plane, so
+// checking for any MPS container is sufficient here.
+func (task *Task) IsMPS() bool {
+	for _, container := range task.Containers {
+		if container.UsesMPS() {
+			return true
+		}
+	}
+	return false
 }
 
 // AddResource adds a resource to ResourcesMap

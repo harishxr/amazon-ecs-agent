@@ -17,6 +17,7 @@
 package task
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"github.com/aws/amazon-ecs-agent/agent/ecscni"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource"
 	"github.com/aws/amazon-ecs-agent/agent/taskresource/cgroup"
+	"github.com/aws/amazon-ecs-agent/agent/taskresource/mpsdaemon"
 	resourcestatus "github.com/aws/amazon-ecs-agent/agent/taskresource/status"
 	resourcetype "github.com/aws/amazon-ecs-agent/agent/taskresource/types"
 	taskresourcevolume "github.com/aws/amazon-ecs-agent/agent/taskresource/volume"
@@ -115,6 +117,25 @@ func (task *Task) initializeCgroupResourceSpec(cgroupPath string, cGroupCPUPerio
 		container.BuildResourceDependency(cgroupResource.GetName(),
 			resourcestatus.ResourceStatus(cgroup.CgroupCreated),
 			apicontainerstatus.ContainerPulled)
+	}
+	return nil
+}
+
+// initializeMPSDaemonResource adds the MPS control daemon health gate, but only for MPS tasks. 
+func (task *Task) initializeMPSDaemonResource(resourceFields *taskresource.ResourceFields) error {
+	if !task.IsMPS() {
+		return nil
+	}
+	ctx := context.Background()
+	if resourceFields != nil && resourceFields.Ctx != nil {
+		ctx = resourceFields.Ctx
+	}
+	mpsResource := mpsdaemon.NewMPSDaemonResource(ctx, task.Arn, nil, "")
+	task.AddResource(resourcetype.MPSDaemonKey, mpsResource)
+	for _, container := range task.Containers {
+		container.BuildResourceDependency(mpsResource.GetName(),
+			resourcestatus.ResourceStatus(mpsdaemon.MPSDaemonCreated),
+			apicontainerstatus.ContainerCreated)
 	}
 	return nil
 }
